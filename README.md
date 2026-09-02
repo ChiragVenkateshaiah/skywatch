@@ -6,6 +6,11 @@ Takes a few minutes of global aircraft-transponder snapshots from the **ADS-B Ex
 sample archive and refines them through a medallion pipeline into a dashboard + Genie space that
 answers "what was happening in the sky during this window?"
 
+**Where this is going:** [`docs/ML_ROADMAP.md`](docs/ML_ROADMAP.md) — the plan to grow this into
+an **Arrival Manager** (per-flight touchdown-time prediction + arrival demand forecasting),
+served through a Databricks App, exercising the full Databricks ML platform. Includes a
+Free Edition vs Production capability matrix.
+
 ## Data source
 
 `https://samples.adsbexchange.com/readsb-hist/<yyyy>/<mm>/<dd>/` — one global snapshot every
