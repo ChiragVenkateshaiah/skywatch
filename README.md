@@ -23,9 +23,10 @@ samples.adsbexchange.com/.json.gz
         ▼
   Bronze  skywatch.core.bronze_aircraft     raw, aircraft array exploded
         ▼
-  Silver  skywatch.core.silver_positions    one typed row per aircraft-position
+  Silver  skywatch.core.silver_positions    one typed row per aircraft report
+                                            (has_position flag; emergency rows kept even w/o a fix)
         ▼
-  Gold    skywatch.core.gold_*              kpis · h3_density · special_squawks
+  Gold    skywatch.core.gold_*              kpis · h3_density · special_squawks · orbits
                                             airline_activity · altitude_bands · type_mix
         │
         ├── AI/BI Dashboard  (map on gold_h3_density, KPI tiles, bar charts, squawk table)

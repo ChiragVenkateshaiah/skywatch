@@ -9,6 +9,11 @@ bundle:
 include:
   - resources/*.yml
 
+sync:
+  exclude:
+    - "*.md"
+    - ".git/**"
+
 # Variables you may want to tweak without editing the notebook.
 variables:
   date_path:
@@ -25,4 +30,4 @@ targets:
     workspace:
       # <-- PASTE your Databricks Free Edition workspace URL here
       # (Profile 'skywatch' created by `databricks auth login` also supplies this.)
-      host: https://REPLACE-ME.cloud.databricks.com
+      host: https://dbc-0fadb959-36a9.cloud.databricks.com

@@ -107,12 +107,15 @@ silver = (b.select(
         F.col("ac.track").cast("double").alias("track_deg"),
         F.col("ac.squawk").cast("string").alias("squawk"),
         F.coalesce(F.col("ac.emergency").cast("string"), F.lit("none")).alias("emergency"),
-        F.col("ac.category").cast("string").alias("category"))
-     .filter("lat IS NOT NULL AND lon IS NOT NULL"))
+        F.col("ac.category").cast("string").alias("category"),
+        F.col("ac.lat").isNotNull().alias("has_position"))
+     .filter("icao IS NOT NULL"))
+# keep position-less rows: an aircraft squawking an emergency but with no fix still matters.
 
 (silver.write.mode("overwrite").option("overwriteSchema", "true")
        .saveAsTable(f"{CATALOG}.{SCHEMA}.silver_positions"))
-print(spark.table(f"{CATALOG}.{SCHEMA}.silver_positions").count(), "clean position rows")
+print(spark.table(f"{CATALOG}.{SCHEMA}.silver_positions").count(), "position rows",
+      "|", spark.table(f"{CATALOG}.{SCHEMA}.silver_positions").filter("has_position").count(), "with a fix")
 display(spark.table(f"{CATALOG}.{SCHEMA}.silver_positions").limit(10))
 
 # COMMAND ----------
@@ -123,13 +126,17 @@ display(spark.table(f"{CATALOG}.{SCHEMA}.silver_positions").limit(10))
 # MAGIC %sql
 # MAGIC CREATE OR REPLACE TABLE skywatch.core.gold_kpis AS
 # MAGIC SELECT
-# MAGIC   count(DISTINCT icao)                                                AS aircraft_tracked,
-# MAGIC   count(*)                                                            AS position_reports,
-# MAGIC   count(DISTINCT left(callsign, 3))                                   AS distinct_airlines,
-# MAGIC   count(DISTINCT ac_type)                                             AS distinct_types,
-# MAGIC   round(sum(CASE WHEN alt_ft > 0 THEN 1 ELSE 0 END) / count(*) * 100, 1) AS pct_airborne,
-# MAGIC   min(snapshot_ts)                                                    AS window_start,
-# MAGIC   max(snapshot_ts)                                                    AS window_end
+# MAGIC   count(DISTINCT CASE WHEN has_position THEN icao END)          AS aircraft_tracked,
+# MAGIC   count(DISTINCT icao)                                          AS raw_contacts,
+# MAGIC   count_if(has_position)                                        AS position_reports,
+# MAGIC   count(DISTINCT left(callsign, 3))                             AS distinct_airlines,
+# MAGIC   count(DISTINCT ac_type)                                       AS distinct_types,
+# MAGIC   round(count_if(alt_ft > 0) / count_if(has_position) * 100, 1) AS pct_airborne,
+# MAGIC   count(DISTINCT CASE WHEN emergency IN
+# MAGIC        ('general','lifeguard','minfuel','nordo','unlawful','downed')
+# MAGIC        THEN icao END)                                           AS emergency_aircraft,
+# MAGIC   min(snapshot_ts)                                              AS window_start,
+# MAGIC   max(snapshot_ts)                                              AS window_end
 # MAGIC FROM skywatch.core.silver_positions;
 
 # COMMAND ----------
@@ -141,7 +148,7 @@ display(spark.table(f"{CATALOG}.{SCHEMA}.silver_positions").limit(10))
 # MAGIC   count(DISTINCT icao) AS aircraft,
 # MAGIC   round(avg(alt_ft))   AS avg_alt_ft
 # MAGIC FROM skywatch.core.silver_positions
-# MAGIC WHERE lat BETWEEN -90 AND 90 AND lon BETWEEN -180 AND 180
+# MAGIC WHERE has_position AND lat BETWEEN -90 AND 90 AND lon BETWEEN -180 AND 180
 # MAGIC GROUP BY 1;
 
 # COMMAND ----------
@@ -149,21 +156,33 @@ display(spark.table(f"{CATALOG}.{SCHEMA}.silver_positions").limit(10))
 # MAGIC CREATE OR REPLACE TABLE skywatch.core.gold_special_squawks AS
 # MAGIC SELECT
 # MAGIC   icao, callsign, ac_type, registration, squawk, emergency,
-# MAGIC   CASE squawk WHEN '7500' THEN 'Hijack (7500)'
-# MAGIC               WHEN '7600' THEN 'Radio failure (7600)'
-# MAGIC               WHEN '7700' THEN 'General emergency (7700)'
-# MAGIC               WHEN '7777' THEN 'Military / intercept (7777)'
-# MAGIC               ELSE concat('Emergency flag: ', emergency) END AS event_type,
-# MAGIC   min(snapshot_ts)  AS first_seen,
-# MAGIC   max(snapshot_ts)  AS last_seen,
-# MAGIC   count(*)          AS pings,
-# MAGIC   round(avg(lat), 3) AS approx_lat,
-# MAGIC   round(avg(lon), 3) AS approx_lon
+# MAGIC   CASE
+# MAGIC     WHEN squawk = '7500' THEN 'Unlawful interference / hijack (7500)'
+# MAGIC     WHEN squawk = '7600' THEN 'Radio failure (7600)'
+# MAGIC     WHEN squawk = '7700' THEN 'General emergency (7700)'
+# MAGIC     WHEN emergency = 'lifeguard' THEN 'Lifeguard / medical flight'
+# MAGIC     WHEN emergency = 'minfuel'   THEN 'Minimum fuel'
+# MAGIC     WHEN emergency = 'nordo'     THEN 'No radio (NORDO)'
+# MAGIC     WHEN emergency = 'unlawful'  THEN 'Unlawful interference'
+# MAGIC     WHEN emergency = 'downed'    THEN 'Aircraft downed'
+# MAGIC     WHEN emergency = 'general'   THEN 'General emergency (flag)'
+# MAGIC     ELSE concat('Emergency: ', emergency) END       AS event_type,
+# MAGIC   -- raw ADS-B is noisy: tier by how much corroborating data came with the emergency bit
+# MAGIC   CASE
+# MAGIC     WHEN bool_or(has_position) AND callsign IS NOT NULL AND icao NOT LIKE '~%' THEN 'high'
+# MAGIC     WHEN bool_or(has_position) OR callsign IS NOT NULL                         THEN 'medium'
+# MAGIC     ELSE 'low' END                                  AS confidence,
+# MAGIC   bool_or(has_position)                             AS has_position,
+# MAGIC   min(snapshot_ts)                                  AS first_seen,
+# MAGIC   max(snapshot_ts)                                  AS last_seen,
+# MAGIC   count(*)                                          AS pings,
+# MAGIC   round(avg(lat), 3)                                AS approx_lat,
+# MAGIC   round(avg(lon), 3)                                AS approx_lon
 # MAGIC FROM skywatch.core.silver_positions
-# MAGIC WHERE squawk IN ('7500', '7600', '7700', '7777')
-# MAGIC    OR emergency NOT IN ('none', '')
-# MAGIC GROUP BY 1, 2, 3, 4, 5, 6, 7
-# MAGIC ORDER BY first_seen;
+# MAGIC WHERE squawk IN ('7500', '7600', '7700')
+# MAGIC    OR emergency IN ('general','lifeguard','minfuel','nordo','unlawful','downed')
+# MAGIC GROUP BY icao, callsign, ac_type, registration, squawk, emergency
+# MAGIC ORDER BY (confidence = 'high') DESC, (confidence = 'medium') DESC, first_seen;
 
 # COMMAND ----------
 # MAGIC %sql
@@ -218,28 +237,37 @@ display(spark.table(f"{CATALOG}.{SCHEMA}.silver_positions").limit(10))
 
 # COMMAND ----------
 # MAGIC %md
-# MAGIC ## 7. STRETCH (only if time) — surveillance-orbit detector
-# MAGIC Aircraft that turned a lot while covering almost no ground = circling (ISR orbit, holding, survey).
+# MAGIC ## 7. STRETCH (only if time) — surveillance-orbit / holding detector
+# MAGIC Circling = heading swept through many directions while the aircraft stayed inside a small box.
+# MAGIC `heading_spread` is circular variance (0 = dead straight, 1 = headings all around the compass),
+# MAGIC computed from sin/cos so it does not break at the 360->0 wrap.
 
 # COMMAND ----------
 # MAGIC %sql
 # MAGIC CREATE OR REPLACE TABLE skywatch.core.gold_orbits AS
-# MAGIC SELECT icao,
-# MAGIC        any_value(callsign) AS callsign,
-# MAGIC        any_value(ac_type)  AS ac_type,
-# MAGIC        count(*)                        AS pings,
-# MAGIC        round(stddev(track_deg))        AS track_variation,
-# MAGIC        round(avg(gs_kt))               AS avg_speed_kt,
-# MAGIC        round(max(lat) - min(lat), 3)   AS lat_spread,
-# MAGIC        round(max(lon) - min(lon), 3)   AS lon_spread
-# MAGIC FROM skywatch.core.silver_positions
-# MAGIC WHERE alt_ft > 1000
-# MAGIC GROUP BY icao
-# MAGIC HAVING count(*) >= 8
-# MAGIC    AND stddev(track_deg) > 55
-# MAGIC    AND (max(lat) - min(lat)) < 0.6
-# MAGIC    AND (max(lon) - min(lon)) < 0.6
-# MAGIC ORDER BY track_variation DESC;
+# MAGIC WITH agg AS (
+# MAGIC   SELECT icao,
+# MAGIC     any_value(callsign) AS callsign,
+# MAGIC     any_value(ac_type)  AS ac_type,
+# MAGIC     count(*)            AS pings,
+# MAGIC     round(avg(gs_kt))   AS avg_speed_kt,
+# MAGIC     round(avg(alt_ft))  AS avg_alt_ft,
+# MAGIC     round((max(lat) - min(lat)) * 111)                          AS ns_km,
+# MAGIC     round((max(lon) - min(lon)) * 111 * cos(radians(avg(lat)))) AS ew_km,
+# MAGIC     round(1 - sqrt(pow(avg(cos(radians(track_deg))), 2)
+# MAGIC                  + pow(avg(sin(radians(track_deg))), 2)), 2)    AS heading_spread,
+# MAGIC     round(avg(lat), 3) AS approx_lat,
+# MAGIC     round(avg(lon), 3) AS approx_lon
+# MAGIC   FROM skywatch.core.silver_positions
+# MAGIC   WHERE has_position AND alt_ft BETWEEN 1000 AND 45000 AND track_deg IS NOT NULL
+# MAGIC   GROUP BY icao
+# MAGIC )
+# MAGIC SELECT * FROM agg
+# MAGIC WHERE pings >= 25            -- loitering for most of the window, not just a turn
+# MAGIC   AND avg_speed_kt >= 120
+# MAGIC   AND heading_spread >= 0.5
+# MAGIC   AND ns_km <= 18 AND ew_km <= 18
+# MAGIC ORDER BY heading_spread DESC;
 
 # COMMAND ----------
 # MAGIC %md
@@ -248,9 +276,18 @@ display(spark.table(f"{CATALOG}.{SCHEMA}.silver_positions").limit(10))
 
 # COMMAND ----------
 # MAGIC %sql
+# MAGIC CREATE OR REPLACE TABLE skywatch.core.gold_briefing AS
 # MAGIC SELECT ai_query(
 # MAGIC   'databricks-meta-llama-3-3-70b-instruct',
-# MAGIC   concat('You are an air-traffic analyst. Write a punchy 3-sentence situational briefing ',
-# MAGIC          'from these airspace statistics: ', to_json(struct(*)))
-# MAGIC ) AS briefing
-# MAGIC FROM skywatch.core.gold_kpis;
+# MAGIC   concat(
+# MAGIC     'You are an air-traffic analyst. In 3 punchy sentences, brief the global airspace picture. ',
+# MAGIC     '"aircraft_tracked" is the confirmed count; "raw_contacts" also counts unverified targets. ',
+# MAGIC     'KPIs: ', (SELECT to_json(struct(*)) FROM skywatch.core.gold_kpis),
+# MAGIC     '  Notable circling / holding aircraft: ',
+# MAGIC     (SELECT to_json(collect_list(struct(callsign, ac_type, avg_alt_ft, approx_lat, approx_lon)))
+# MAGIC      FROM (SELECT * FROM skywatch.core.gold_orbits ORDER BY heading_spread DESC LIMIT 8)))
+# MAGIC ) AS briefing;
+
+# COMMAND ----------
+# MAGIC %sql
+# MAGIC SELECT briefing FROM skywatch.core.gold_briefing;
