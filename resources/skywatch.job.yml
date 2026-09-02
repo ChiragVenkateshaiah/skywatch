@@ -1,0 +1,21 @@
+# SkyWatch Lite — serverless job that runs the whole medallion pipeline.
+# No job_clusters block => runs on serverless compute (required on Free Edition).
+
+resources:
+  jobs:
+    skywatch_lite:
+      name: skywatch-lite-pipeline
+      max_concurrent_runs: 1
+      tags:
+        project: skywatch-lite
+
+      tasks:
+        - task_key: pipeline
+          notebook_task:
+            notebook_path: ../src/skywatch_lite.py
+            base_parameters:
+              date_path: ${var.date_path}
+              n_files: ${var.n_files}
+
+      queue:
+        enabled: true

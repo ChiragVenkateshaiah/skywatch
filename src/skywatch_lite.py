@@ -1,0 +1,256 @@
+# Databricks notebook source
+# MAGIC %md
+# MAGIC # SkyWatch Lite
+# MAGIC Historical airspace analytics on Databricks Free Edition.
+# MAGIC
+# MAGIC **Source:** ADS-B Exchange free sample archive (`samples.adsbexchange.com/readsb-hist`) — CC-BY-NC.
+# MAGIC
+# MAGIC **Pipeline:** land `.json.gz` snapshots -> Bronze -> Silver -> Gold -> AI/BI dashboard + Genie.
+# MAGIC
+# MAGIC Run cells top to bottom.
+
+# COMMAND ----------
+# MAGIC %md ## 1. Config  — edit `DATE_PATH` to a date that actually has data
+
+# COMMAND ----------
+CATALOG    = "skywatch"
+SCHEMA     = "core"
+VOLUME     = "landing"
+START_HHMMSS = (12, 0, 0)   # time of day to start pulling snapshots from
+
+# Parameters — supplied by the Asset Bundle job (base_parameters), with defaults for
+# interactive runs. Verify DATE_PATH against https://samples.adsbexchange.com/readsb-hist/
+try:
+    dbutils.widgets.text("date_path", "2024/06/01")
+    dbutils.widgets.text("n_files", "60")
+    DATE_PATH = dbutils.widgets.get("date_path")
+    N_FILES   = int(dbutils.widgets.get("n_files"))
+except Exception:
+    DATE_PATH, N_FILES = "2024/06/01", 60
+print(f"DATE_PATH={DATE_PATH}  N_FILES={N_FILES}")
+
+spark.sql(f"CREATE CATALOG IF NOT EXISTS {CATALOG}")
+spark.sql(f"CREATE SCHEMA  IF NOT EXISTS {CATALOG}.{SCHEMA}")
+spark.sql(f"CREATE VOLUME  IF NOT EXISTS {CATALOG}.{SCHEMA}.{VOLUME}")
+print(f"ready: {CATALOG}.{SCHEMA}, volume /Volumes/{CATALOG}/{SCHEMA}/{VOLUME}/")
+
+# COMMAND ----------
+# MAGIC %md ## 2. Land raw snapshots into the Volume
+
+# COMMAND ----------
+import os, requests
+from datetime import datetime, timedelta
+
+base = f"https://samples.adsbexchange.com/readsb-hist/{DATE_PATH}/"
+dest = f"/Volumes/{CATALOG}/{SCHEMA}/{VOLUME}/"
+
+t0 = datetime(2000, 1, 1, *START_HHMMSS)
+candidates = [(t0 + timedelta(seconds=5 * i)).strftime("%H%M%SZ.json.gz") for i in range(4000)]
+
+got, tried = 0, 0
+for name in candidates:
+    if got >= N_FILES:
+        break
+    # the archive serves these decompressed despite the .gz name -> save as plain .json
+    local = os.path.join(dest, name.replace(".json.gz", ".json"))
+    if os.path.exists(local):
+        got += 1
+        continue
+    tried += 1
+    try:
+        r = requests.get(base + name, timeout=30)
+    except Exception as e:
+        print("err", name, e); continue
+    if r.status_code == 200 and len(r.content) > 500:
+        with open(local, "wb") as f:
+            f.write(r.content)
+        got += 1
+
+print(f"{got} files in {dest}  (tried {tried})")
+if got == 0:
+    raise RuntimeError("No files downloaded. Check DATE_PATH against the directory listing, "
+                       "or use the manual-upload fallback in the README.")
+display(dbutils.fs.ls(dest))
+
+# COMMAND ----------
+# MAGIC %md ## 3. Bronze — read the gzipped JSON, explode the aircraft array
+
+# COMMAND ----------
+from pyspark.sql import functions as F
+
+raw = spark.read.option("multiLine", True).json(f"/Volumes/{CATALOG}/{SCHEMA}/{VOLUME}/*.json")
+print("top-level columns:", raw.columns)
+
+ac_col = "aircraft" if "aircraft" in raw.columns else "ac"
+bronze = raw.select(F.col("now").alias("snapshot_epoch"), F.explode(ac_col).alias("ac"))
+(bronze.write.mode("overwrite").option("overwriteSchema", "true")
+       .saveAsTable(f"{CATALOG}.{SCHEMA}.bronze_aircraft"))
+print(spark.table(f"{CATALOG}.{SCHEMA}.bronze_aircraft").count(), "raw position rows")
+
+# COMMAND ----------
+# MAGIC %md ## 4. Silver — one clean, typed row per aircraft-position
+
+# COMMAND ----------
+b = spark.table(f"{CATALOG}.{SCHEMA}.bronze_aircraft")
+
+silver = (b.select(
+        F.to_timestamp("snapshot_epoch").alias("snapshot_ts"),
+        F.col("ac.hex").alias("icao"),
+        F.trim(F.col("ac.flight")).alias("callsign"),
+        F.col("ac.r").alias("registration"),
+        F.col("ac.t").alias("ac_type"),
+        F.col("ac.lat").cast("double").alias("lat"),
+        F.col("ac.lon").cast("double").alias("lon"),
+        F.when(F.col("ac.alt_baro").cast("string") == "ground", F.lit(0))
+         .otherwise(F.col("ac.alt_baro").cast("int")).alias("alt_ft"),
+        F.col("ac.gs").cast("double").alias("gs_kt"),
+        F.col("ac.track").cast("double").alias("track_deg"),
+        F.col("ac.squawk").cast("string").alias("squawk"),
+        F.coalesce(F.col("ac.emergency").cast("string"), F.lit("none")).alias("emergency"),
+        F.col("ac.category").cast("string").alias("category"))
+     .filter("lat IS NOT NULL AND lon IS NOT NULL"))
+
+(silver.write.mode("overwrite").option("overwriteSchema", "true")
+       .saveAsTable(f"{CATALOG}.{SCHEMA}.silver_positions"))
+print(spark.table(f"{CATALOG}.{SCHEMA}.silver_positions").count(), "clean position rows")
+display(spark.table(f"{CATALOG}.{SCHEMA}.silver_positions").limit(10))
+
+# COMMAND ----------
+# MAGIC %md ## 5. Gold — aggregate tables for the dashboard
+# MAGIC (SQL below hardcodes `skywatch.core`; find/replace if you changed the names.)
+
+# COMMAND ----------
+# MAGIC %sql
+# MAGIC CREATE OR REPLACE TABLE skywatch.core.gold_kpis AS
+# MAGIC SELECT
+# MAGIC   count(DISTINCT icao)                                                AS aircraft_tracked,
+# MAGIC   count(*)                                                            AS position_reports,
+# MAGIC   count(DISTINCT left(callsign, 3))                                   AS distinct_airlines,
+# MAGIC   count(DISTINCT ac_type)                                             AS distinct_types,
+# MAGIC   round(sum(CASE WHEN alt_ft > 0 THEN 1 ELSE 0 END) / count(*) * 100, 1) AS pct_airborne,
+# MAGIC   min(snapshot_ts)                                                    AS window_start,
+# MAGIC   max(snapshot_ts)                                                    AS window_end
+# MAGIC FROM skywatch.core.silver_positions;
+
+# COMMAND ----------
+# MAGIC %sql
+# MAGIC CREATE OR REPLACE TABLE skywatch.core.gold_h3_density AS
+# MAGIC SELECT
+# MAGIC   h3_longlatash3string(lon, lat, 3) AS h3_cell,
+# MAGIC   count(*)             AS position_reports,
+# MAGIC   count(DISTINCT icao) AS aircraft,
+# MAGIC   round(avg(alt_ft))   AS avg_alt_ft
+# MAGIC FROM skywatch.core.silver_positions
+# MAGIC WHERE lat BETWEEN -90 AND 90 AND lon BETWEEN -180 AND 180
+# MAGIC GROUP BY 1;
+
+# COMMAND ----------
+# MAGIC %sql
+# MAGIC CREATE OR REPLACE TABLE skywatch.core.gold_special_squawks AS
+# MAGIC SELECT
+# MAGIC   icao, callsign, ac_type, registration, squawk, emergency,
+# MAGIC   CASE squawk WHEN '7500' THEN 'Hijack (7500)'
+# MAGIC               WHEN '7600' THEN 'Radio failure (7600)'
+# MAGIC               WHEN '7700' THEN 'General emergency (7700)'
+# MAGIC               WHEN '7777' THEN 'Military / intercept (7777)'
+# MAGIC               ELSE concat('Emergency flag: ', emergency) END AS event_type,
+# MAGIC   min(snapshot_ts)  AS first_seen,
+# MAGIC   max(snapshot_ts)  AS last_seen,
+# MAGIC   count(*)          AS pings,
+# MAGIC   round(avg(lat), 3) AS approx_lat,
+# MAGIC   round(avg(lon), 3) AS approx_lon
+# MAGIC FROM skywatch.core.silver_positions
+# MAGIC WHERE squawk IN ('7500', '7600', '7700', '7777')
+# MAGIC    OR emergency NOT IN ('none', '')
+# MAGIC GROUP BY 1, 2, 3, 4, 5, 6, 7
+# MAGIC ORDER BY first_seen;
+
+# COMMAND ----------
+# MAGIC %sql
+# MAGIC CREATE OR REPLACE TABLE skywatch.core.gold_airline_activity AS
+# MAGIC SELECT
+# MAGIC   left(callsign, 3)    AS airline_icao,
+# MAGIC   count(DISTINCT icao) AS aircraft,
+# MAGIC   count(*)             AS position_reports,
+# MAGIC   round(avg(alt_ft))   AS avg_alt_ft,
+# MAGIC   round(avg(gs_kt))    AS avg_ground_speed_kt
+# MAGIC FROM skywatch.core.silver_positions
+# MAGIC WHERE callsign RLIKE '^[A-Z]{3}[0-9]'
+# MAGIC GROUP BY 1
+# MAGIC ORDER BY aircraft DESC;
+
+# COMMAND ----------
+# MAGIC %sql
+# MAGIC CREATE OR REPLACE TABLE skywatch.core.gold_altitude_bands AS
+# MAGIC SELECT
+# MAGIC   CASE WHEN alt_ft <= 0 THEN 'On ground'
+# MAGIC        ELSE concat(cast(floor(alt_ft / 5000) * 5 AS int), '-',
+# MAGIC                    cast(floor(alt_ft / 5000) * 5 + 5 AS int), 'k ft') END AS altitude_band,
+# MAGIC   floor(alt_ft / 5000) AS band_sort,
+# MAGIC   count(*)             AS position_reports,
+# MAGIC   count(DISTINCT icao) AS aircraft
+# MAGIC FROM skywatch.core.silver_positions
+# MAGIC WHERE alt_ft IS NOT NULL
+# MAGIC GROUP BY 1, 2
+# MAGIC ORDER BY band_sort;
+
+# COMMAND ----------
+# MAGIC %sql
+# MAGIC CREATE OR REPLACE TABLE skywatch.core.gold_type_mix AS
+# MAGIC SELECT ac_type,
+# MAGIC        count(DISTINCT icao) AS aircraft,
+# MAGIC        count(*)             AS position_reports
+# MAGIC FROM skywatch.core.silver_positions
+# MAGIC WHERE ac_type IS NOT NULL AND ac_type <> ''
+# MAGIC GROUP BY 1
+# MAGIC ORDER BY aircraft DESC;
+
+# COMMAND ----------
+# MAGIC %md ## 6. Sanity check
+
+# COMMAND ----------
+# MAGIC %sql
+# MAGIC SELECT * FROM skywatch.core.gold_kpis;
+
+# COMMAND ----------
+# MAGIC %sql
+# MAGIC SELECT * FROM skywatch.core.gold_special_squawks;
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## 7. STRETCH (only if time) — surveillance-orbit detector
+# MAGIC Aircraft that turned a lot while covering almost no ground = circling (ISR orbit, holding, survey).
+
+# COMMAND ----------
+# MAGIC %sql
+# MAGIC CREATE OR REPLACE TABLE skywatch.core.gold_orbits AS
+# MAGIC SELECT icao,
+# MAGIC        any_value(callsign) AS callsign,
+# MAGIC        any_value(ac_type)  AS ac_type,
+# MAGIC        count(*)                        AS pings,
+# MAGIC        round(stddev(track_deg))        AS track_variation,
+# MAGIC        round(avg(gs_kt))               AS avg_speed_kt,
+# MAGIC        round(max(lat) - min(lat), 3)   AS lat_spread,
+# MAGIC        round(max(lon) - min(lon), 3)   AS lon_spread
+# MAGIC FROM skywatch.core.silver_positions
+# MAGIC WHERE alt_ft > 1000
+# MAGIC GROUP BY icao
+# MAGIC HAVING count(*) >= 8
+# MAGIC    AND stddev(track_deg) > 55
+# MAGIC    AND (max(lat) - min(lat)) < 0.6
+# MAGIC    AND (max(lon) - min(lon)) < 0.6
+# MAGIC ORDER BY track_variation DESC;
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## 8. STRETCH (only if time) — GenAI airspace briefing
+# MAGIC If the model name errors, open **Serving** and copy an available Foundation Model endpoint name.
+
+# COMMAND ----------
+# MAGIC %sql
+# MAGIC SELECT ai_query(
+# MAGIC   'databricks-meta-llama-3-3-70b-instruct',
+# MAGIC   concat('You are an air-traffic analyst. Write a punchy 3-sentence situational briefing ',
+# MAGIC          'from these airspace statistics: ', to_json(struct(*)))
+# MAGIC ) AS briefing
+# MAGIC FROM skywatch.core.gold_kpis;

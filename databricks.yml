@@ -1,0 +1,28 @@
+# Databricks Asset Bundle — SkyWatch Lite
+# Deploy:  databricks bundle deploy -t dev
+# Run:     databricks bundle run skywatch_lite -t dev
+# Docs:    https://docs.databricks.com/dev-tools/bundles
+
+bundle:
+  name: skywatch-lite
+
+include:
+  - resources/*.yml
+
+# Variables you may want to tweak without editing the notebook.
+variables:
+  date_path:
+    description: ADS-B Exchange sample archive date (yyyy/mm/dd) with data present.
+    default: "2024/06/01"
+  n_files:
+    description: Number of 5-second snapshots to ingest.
+    default: "60"
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      # <-- PASTE your Databricks Free Edition workspace URL here
+      # (Profile 'skywatch' created by `databricks auth login` also supplies this.)
+      host: https://REPLACE-ME.cloud.databricks.com
