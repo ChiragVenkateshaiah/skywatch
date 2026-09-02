@@ -63,6 +63,39 @@ free.
 The point of the project is to exercise the **whole platform** end to end, with each modeling
 choice justified by the problem rather than picked to show off a feature.
 
+### 2.1 Build split — Genie Code vs repository code
+
+**Genie Code** (Databricks' agentic authoring agent, Agent mode) is the tool for presentation
+and exploration work. **Repository code deployed via the Asset Bundle** is the tool for anything
+that must be reproducible, testable, and reviewed.
+
+| Work | Tool | Why |
+|---|---|---|
+| AI/BI dashboards (every version) | **Genie Code** — prompt-driven; then `bundle generate dashboard` to capture into the repo | Dashboards change often; the agent is good at layout/viz; IaC is preserved at the end |
+| Exploratory data analysis / pipeline validation | **Genie Code** | Fast profiling before schemas freeze; throwaway |
+| Genie Space (end-user Q&A) config | Claude writes instructions + curated table list + starred questions; user pastes | Prose config, not code |
+| Medallion transforms | **Repo + DAB** | Correctness-critical; needs diffs and tests |
+| Touchdown / labelling logic | **Repo + DAB** | Correctness-critical; unit-tested |
+| Feature Engineering tables | **Repo + DAB** | Shared by training and scoring; point-in-time correctness |
+| Model training / tuning / registration | **Repo + DAB** | Reproducible, MLflow-tracked |
+| Poller job, scoring job | **Repo + DAB** | Production jobs |
+| Databricks App | **Repo + DAB** | Reviewed application code |
+
+**Hand-off protocol for every Genie Code task:**
+
+1. Claude posts a prompt in a fenced block headed `GENIE CODE PROMPT — <task>`, delivered when
+   the plan reaches that task (not all up front).
+2. User opens Genie Code in Agent mode (new AI/BI dashboard, or a notebook for EDA), pastes it,
+   reviews the guided plan, accepts.
+3. Follow-ups (e.g. "beautify", "fix tile 3") are posted the same way.
+4. For dashboards: user runs `databricks bundle generate dashboard --existing-dashboard-id <id>`
+   to pull the result into `src/`; Claude then reviews the generated JSON and proposes tweaks
+   (further Genie prompts, or direct edits for small fixes).
+
+**Free Edition note:** Genie Code has a monthly allowance (~150 DBUs/user), then pay-as-you-go.
+Prompts are written to land a dashboard in one or two passes, not many small iterations, to
+stay inside the allowance.
+
 ---
 
 ## 3. The models
@@ -347,13 +380,16 @@ Databricks secrets.
 
 ## 10. Dashboards & Genie
 
-**AI/BI Dashboard** — KPI tiles (current inbound count, next-hour predicted arrivals, AAR
-headroom, mean holding time today), demand-vs-capacity chart, arrival heatmap by hour, holding
-events table, model-accuracy tile (yesterday's MAE from the predictions vs actuals join).
+**AI/BI Dashboard** — built with **Genie Code** (see §2.1 hand-off protocol), then captured into
+the repo with `bundle generate dashboard`. KPI tiles (current inbound count, next-hour predicted
+arrivals, AAR headroom, mean holding time today), demand-vs-capacity chart, arrival heatmap by
+hour, holding events table, model-accuracy tile (yesterday's MAE from the predictions vs actuals
+join).
 
-**Genie space** over `silver_positions`, `gold_*`, `predictions`, `demand_forecast` — natural
-language for "how many holding right now?", "busiest 15 minutes predicted this evening?",
-"average approach delay by hour last week?".
+**Genie space** over `silver_positions`, `gold_*`, `predictions`, `demand_forecast` — Claude
+supplies the instructions block, curated table list, and starred questions; user creates the
+space. Natural language for "how many holding right now?", "busiest 15 minutes predicted this
+evening?", "average approach delay by hour last week?".
 
 ---
 
@@ -383,15 +419,17 @@ Each phase is independently demoable.
 - Silver with derived kinematics + airport geometry + phase.
 - Gold: touchdown detection, demand series, congestion rings, holding flags.
 - Historical backfill job (~90 days, minute cadence, spatially pre-filtered).
-- AI/BI dashboard v1 + Genie space (no predictions yet — just the live picture).
-- **Platform surface:** Lakeflow Declarative Pipelines, Auto Loader, Structured Streaming, UC Volumes, AI/BI, Genie.
+- **[Genie Code]** EDA pass to validate silver/gold before freezing schemas.
+- **[Genie Code]** AI/BI dashboard v1 (no predictions yet — just the live picture); capture into repo.
+- Genie space v1 (Claude supplies config).
+- **Platform surface:** Lakeflow Declarative Pipelines, Auto Loader, Structured Streaming, UC Volumes, AI/BI, Genie, Genie Code.
 
 ### Phase 2 — Model 1: time-to-touchdown  *(model)*
 - Feature Engineering tables for M1.
 - AutoML baseline → LightGBM → Hyperopt tuning, all in MLflow.
 - Time-based split, MAE-by-distance-band evaluation, register to UC.
 - Scoring job → `predictions` Delta table.
-- Dashboard gains the arrival-sequence table and accuracy tile.
+- **[Genie Code]** dashboard gains the arrival-sequence table and accuracy tile; re-capture.
 - **Platform surface:** Feature Engineering in UC, AutoML, MLflow, Hyperopt, UC Model Registry, `mlflow.pyfunc` batch scoring.
 
 ### Phase 3 — Model 2: demand forecast  *(fine-tuning centrepiece)*
@@ -399,7 +437,7 @@ Each phase is independently demoable.
 - Baselines: seasonal-naive, `statsforecast` AutoETS/AutoARIMA, AutoML forecast, Chronos-Bolt zero-shot.
 - Fine-tune Chronos-Bolt on serverless GPU (CPU fallback); log GPU hours, config, all backtests.
 - Register to UC; scoring job extends to write `demand_forecast`.
-- Dashboard + App show the stitched M1+M2 demand curve and surge alerts.
+- **[Genie Code]** dashboard + App show the stitched M1+M2 demand curve and surge alerts.
 - **Platform surface:** serverless GPU, foundation-model fine-tuning, MLflow, rolling-origin backtesting.
 
 ### Phase 4 — Databricks App  *(serve)*
@@ -411,7 +449,7 @@ Each phase is independently demoable.
 ### Phase 5 — Model 3: irregularity early-warning  *(second use case)*
 - Label holding / go-around / diversion / emergency from tracks.
 - One-vs-rest classifiers; precision/recall per class; register + score.
-- App + dashboard irregularity panel.
+- App + **[Genie Code]** dashboard irregularity panel.
 
 ### Phase 6 — Production hardening
 - Move to a paid workspace: real Model Serving endpoints + inference tables, online feature tables, continuous streaming, Lakehouse Monitoring.
@@ -429,6 +467,7 @@ Each phase is independently demoable.
 | Lakeflow Declarative Pipelines (DLT) | ✅ **one active pipeline per type** | ✅ many | Single medallion pipeline — fine for v1 |
 | UC Volumes / Unity Catalog / Delta | ✅ | ✅ | No change |
 | AI/BI Dashboards + Genie | ✅ | ✅ | No change |
+| **Genie Code** (agentic dashboard/EDA authoring) | ✅ **~150 DBU/user/month allowance, then pay-as-you-go** | ✅ | Write prompts to converge in 1–2 passes; dashboards captured to repo via `bundle generate` |
 | SQL Warehouse | ✅ one, 2X-Small | ✅ many, any size | App/dashboard reads are light — fine |
 | MLflow tracking + UC Model Registry | ✅ | ✅ | No change — full lifecycle works |
 | AutoML | ✅ | ✅ | No change |
@@ -465,10 +504,15 @@ architecture rather than replacing it.
 
 ---
 
-## 14. Open questions / decisions
+## 14. Decisions
 
-- **Airport:** KATL confirmed, or a European hub for different traffic patterns?
-- **Live source:** airplanes.live vs OpenSky vs paid — depends on ToS tolerance for a portfolio project.
+**Settled (2026-09-02):**
+- **Airport:** KATL (Atlanta) for v1 — strongest demand-banking signal, densest ADS-B coverage. EGLL added at Model 3 (holding stacks).
+- **Live source:** airplanes.live (no auth, schema matches the `readsb-hist` backfill, non-commercial use with attribution). OpenSky as fallback.
+- **Start:** Phase 1, live path first; historical backfill is the last task of Phase 1.
+- **Dashboards / EDA:** Genie Code (see §2.1). Pipeline/model/app code stays in the repo + DAB.
+
+**Open:**
 - **M2 model:** Chronos-Bolt vs Moirai vs TimesFM — decide after the zero-shot baseline bake-off.
-- **M1 v2:** do we also build the sequence-model (Transformer) variant to show that path, or leave it documented?
+- **M1 v2:** also build the sequence-model (Transformer) variant to show that path, or leave it documented?
 - **Paid workspace:** when (if at all) do we cross over for the production demo?
