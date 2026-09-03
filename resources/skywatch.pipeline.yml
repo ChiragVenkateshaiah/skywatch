@@ -1,0 +1,22 @@
+# SkyWatch — medallion pipeline (Lakeflow Declarative Pipeline).
+# Serverless (required on Free Edition). Triggered, not continuous — run it on demand during
+# the EDA phase:  databricks bundle run skywatch_medallion -t dev
+# Free Edition allows one active pipeline per type, so this is the only DLT pipeline.
+
+resources:
+  pipelines:
+    skywatch_medallion:
+      name: skywatch-medallion
+      serverless: true
+      catalog: ${var.catalog}
+      schema: ${var.core_schema}
+      continuous: false
+      photon: true
+
+      libraries:
+        - notebook:
+            path: ../src/pipeline_medallion.py
+
+      configuration:
+        skywatch.landing_path: /Volumes/${var.catalog}/${var.core_schema}/${var.landing_volume}/airplaneslive
+        skywatch.schema_location: /Volumes/${var.catalog}/${var.core_schema}/${var.landing_volume}/_autoloader/medallion

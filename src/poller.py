@@ -89,7 +89,7 @@ def one_poll(session: requests.Session) -> dict:
 
     # tag each record with the airport this poll was centred on, so a future multi-airport
     # setup keeps its provenance in the raw layer
-    body["_skywatch"] = {
+    body["capture"] = {
         "apt_icao": APT_ICAO,
         "apt_lat": APT_LAT,
         "apt_lon": APT_LON,
