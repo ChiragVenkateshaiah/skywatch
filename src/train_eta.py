@@ -81,7 +81,10 @@ sdf = (
 pdf = sdf.select(
     "seg_id", "obs_date", "ac_type", TARGET, "baseline_pred", *FEATURES
 ).toPandas()
-pdf["phase"] = pdf["phase"].astype("category")
+# Spark round() yields DECIMAL -> decimal.Decimal in pandas; force float everywhere numeric
+_num = [c for c in pdf.columns if c not in ("seg_id", "obs_date", "ac_type", "phase")]
+pdf[_num] = pdf[_num].astype("float64")
+pdf["phase"] = pdf["phase"].fillna("unknown").astype("category")
 
 print(f"{len(pdf):,} rows | {pdf.seg_id.nunique():,} arrivals | dates {sorted(pdf.obs_date.unique())}")
 

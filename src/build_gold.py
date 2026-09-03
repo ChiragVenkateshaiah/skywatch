@@ -201,7 +201,7 @@ SELECT
   t.seg_id, t.icao, t.callsign, t.ac_type, t.apt_icao,
   t.snapshot_ts,
   td.touchdown_ts,
-  round((unix_timestamp(td.touchdown_ts) - unix_timestamp(t.snapshot_ts)) / 60.0, 3)
+  cast((unix_timestamp(td.touchdown_ts) - unix_timestamp(t.snapshot_ts)) / 60.0 AS double)
                                                      AS minutes_to_touchdown,
   -- features
   t.dist_to_apt_nm, t.bearing_to_apt, t.heading_err_deg,
