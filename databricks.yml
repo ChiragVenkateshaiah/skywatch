@@ -97,6 +97,14 @@ variables:
     description: 'UTC hour range to include, e.g. "10-04" (wraps). Blank = all 24 h.'
     default: ""
 
+  # --- Model 1: time-to-touchdown (src/train_eta.py) ---
+  eta_test_date:
+    description: Held-out test day for Model 1 (the most recent backfill day).
+    default: "2026-09-01"
+  eta_max_evals:
+    description: Hyperopt trials for Model 1 tuning.
+    default: "24"
+
 targets:
   dev:
     mode: development

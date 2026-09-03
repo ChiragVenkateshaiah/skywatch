@@ -1,0 +1,27 @@
+# SkyWatch — Model 1 training job (time-to-touchdown).
+# Serverless, on demand:  databricks bundle run skywatch_train_eta -t dev
+# Retrain when new backfill / live data has been ingested and Gold rebuilt.
+
+resources:
+  jobs:
+    skywatch_train_eta:
+      name: skywatch-train-eta
+      max_concurrent_runs: 1
+      timeout_seconds: 7200
+      tags:
+        project: skywatch
+        component: ml
+
+      tasks:
+        - task_key: train
+          notebook_task:
+            notebook_path: ../src/train_eta.py
+            base_parameters:
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              model_name: ${var.catalog}.ml.eta_touchdown
+              test_date: ${var.eta_test_date}
+              max_evals: ${var.eta_max_evals}
+              run_automl: "false"
+
+      queue:
+        enabled: true
