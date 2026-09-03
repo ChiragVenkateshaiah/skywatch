@@ -1,20 +1,21 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # SkyWatch — historical backfill
+# MAGIC # SkyWatch — historical backfill (Databricks version)
 # MAGIC
-# MAGIC Pulls **ADS-B Exchange `readsb-hist`** global snapshots for a range of past days, keeps only
-# MAGIC the aircraft within `radius_nm` of the target airport, and writes each one wrapped in the
-# MAGIC **same envelope the live poller uses** so it flows through Bronze → Silver → Gold unchanged
-# MAGIC (the `capture.source` tag is `"backfill"` instead of `"adsblol"`).
+# MAGIC > **On Free Edition, run `scripts/backfill_local.py` instead** — it does the same download
+# MAGIC > off-platform so the ~6 MB/file global download (10s of GB) doesn't burn the serverless
+# MAGIC > fair-use quota. This notebook is the in-workspace version for a paid workspace with
+# MAGIC > headroom. Both share the same download/filter/wrap logic.
+# MAGIC
+# MAGIC Pulls **ADS-B Exchange `readsb-hist`** global snapshots, keeps only the aircraft within
+# MAGIC `radius_nm` of the airport, and writes each wrapped in the **same envelope the live poller
+# MAGIC uses** (`capture.source = "backfill"`) so it flows through Bronze → Silver → Gold unchanged.
 # MAGIC
 # MAGIC - Source: `https://samples.adsbexchange.com/readsb-hist/<yyyy>/<mm>/<dd>/HHMMSSZ.json.gz`
-# MAGIC   (served decompressed, ~6 MB each, native cadence ~5 s, CC-BY-NC — credit "ADS-B Exchange").
-# MAGIC - **Resumable**: one output file per target timestamp; existing outputs are skipped, so the
-# MAGIC   job can be re-run in chunks across Free Edition quota windows.
-# MAGIC - **Be a good citizen**: this hits a free community archive. Keep `interval_seconds` coarse
-# MAGIC   (≥ 120), `radius_nm` tight (≤ 100), and `request_sleep_s` > 0. Each 6 MB global file is
-# MAGIC   downloaded in full and filtered locally — the download volume, not the row count, is the
-# MAGIC   cost. ~3 days × 120 s ≈ 2 000 files ≈ 13 GB.
+# MAGIC   — served decompressed, ~6 MB each, native cadence ~5 s. CC-BY-NC — credit "ADS-B Exchange".
+# MAGIC - **The archive only has the 1st of each month** (2023-01 .. present), each a full 24 h.
+# MAGIC   `dates` takes an explicit `YYYY-MM-DD` list; blank = the `months` most recent 1st-of-month.
+# MAGIC - **Resumable**: one output per target timestamp; existing outputs are skipped.
 # MAGIC
 # MAGIC Output: `/Volumes/<catalog>/<schema>/<volume>/backfill/dt=YYYY-MM-DD/hh=HH/<yyyymmdd_hhmm>.json`
 
@@ -38,13 +39,13 @@ _DEFAULTS = {
     "apt_lat": "33.6407",
     "apt_lon": "-84.4277",
     "apt_icao": "KATL",
-    "radius_nm": "80",           # tight — backfill is for touchdown / demand, near the field
-    "start_date": "",            # YYYY-MM-DD; blank = (today UTC - n_days)
-    "n_days": "3",
-    "interval_seconds": "120",   # target spacing between snapshots
-    "hours": "",                 # "" = all; else inclusive UTC range e.g. "11-23"
-    "max_files": "6000",         # hard safety cap on writes per run
-    "request_sleep_s": "0.25",
+    "radius_nm": "100",          # near-field; still ~1% of the global file
+    "dates": "",                 # explicit YYYY-MM-DD list; blank = `months` most recent 1st-of-month
+    "months": "3",
+    "interval_seconds": "60",    # target spacing between snapshots
+    "hours": "",                 # "" = all; else inclusive UTC range e.g. "10-04" (wraps)
+    "max_files": "20000",        # hard safety cap on writes per run
+    "request_sleep_s": "0.2",
 }
 
 try:
@@ -57,23 +58,33 @@ except Exception:
 CATALOG, SCHEMA, VOLUME = P["catalog"], P["schema"], P["volume"]
 APT_LAT, APT_LON, APT_ICAO = float(P["apt_lat"]), float(P["apt_lon"]), P["apt_icao"]
 RADIUS_NM = float(P["radius_nm"])
-N_DAYS = int(P["n_days"])
-INTERVAL_S = max(30, int(P["interval_seconds"]))
+INTERVAL_S = max(15, int(P["interval_seconds"]))
 MAX_FILES = int(P["max_files"])
 SLEEP_S = float(P["request_sleep_s"])
 
-if P["start_date"].strip():
-    start_date = datetime.strptime(P["start_date"].strip(), "%Y-%m-%d").date()
-else:
-    start_date = (datetime.now(timezone.utc) - timedelta(days=N_DAYS)).date()
-dates = [start_date + timedelta(days=i) for i in range(N_DAYS)]
 
-hour_lo, hour_hi = 0, 23
+def _recent_first_of_month(n):
+    d = datetime.now(timezone.utc).date()
+    y, m, out = d.year, d.month, []
+    for _ in range(n):
+        out.append(datetime(y, m, 1).date())
+        y, m = (y - 1, 12) if m == 1 else (y, m - 1)
+    return list(reversed(out))
+
+
+if P["dates"].strip():
+    dates = [datetime.strptime(s.strip(), "%Y-%m-%d").date() for s in P["dates"].split(",")]
+else:
+    dates = _recent_first_of_month(int(P["months"]))
+
 if P["hours"].strip():
-    hour_lo, hour_hi = (int(x) for x in P["hours"].split("-"))
+    _lo, _hi = (int(x) for x in P["hours"].split("-"))
+    hour_ok = (lambda h: _lo <= h <= _hi) if _lo <= _hi else (lambda h: h >= _lo or h <= _hi)
+else:
+    hour_ok = lambda h: True
 
 print(f"{APT_ICAO}: keep aircraft within {RADIUS_NM} nm")
-print(f"dates {dates[0]} .. {dates[-1]}  |  every {INTERVAL_S}s  |  hours {hour_lo}-{hour_hi} UTC")
+print(f"dates {[d.isoformat() for d in dates]}  |  every {INTERVAL_S}s  |  hours {P['hours'] or 'all'} UTC")
 
 # COMMAND ----------
 # MAGIC %md ## Setup
@@ -126,7 +137,7 @@ with requests.Session() as s:
                 break
             hh, rem = divmod(secs, 3600)
             mn = rem // 60
-            if not (hour_lo <= hh <= hour_hi):
+            if not hour_ok(hh):
                 continue
 
             tag = f"{yyyy}{mm}{dd}_{hh:02d}{mn:02d}"

@@ -27,8 +27,8 @@ resources:
               apt_lat: ${var.apt_lat}
               apt_lon: ${var.apt_lon}
               radius_nm: ${var.backfill_radius_nm}
-              start_date: ${var.backfill_start_date}
-              n_days: ${var.backfill_n_days}
+              dates: ${var.backfill_dates}
+              months: ${var.backfill_months}
               interval_seconds: ${var.backfill_interval_s}
               hours: ${var.backfill_hours}
 

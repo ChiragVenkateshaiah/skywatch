@@ -214,20 +214,29 @@ bundle variable — swapping to any v2-compatible host is a one-line change + re
 
 ### 5.2 Historical backfill (for training)
 
-`src/backfill.py` (job `skywatch_backfill`, on demand). The `readsb-hist` archive at
-`samples.adsbexchange.com/readsb-hist/<yyyy>/<mm>/<dd>/` has one global snapshot every ~5 s,
-served as plain JSON (~6 MB / 13.5k aircraft each), for individual days going back years.
+**Source reality:** `samples.adsbexchange.com/readsb-hist/` has **only the 1st of each month**
+(2023-01 → present), *not* continuous days. Each available day is a full 24 h at ~5 s cadence,
+served as plain JSON (~6 MB / 13.5k aircraft per file).
 
-1. For each target day, at a coarse cadence (`backfill_interval_s`, default 120 s), download
-   the nearest snapshot, keep only aircraft within `backfill_radius_nm` (default 80 nm) of the
-   field, and write it wrapped in the **same envelope the poller uses** (`source='backfill'`).
-   A 6 MB global file → ~65 KB landed.
-2. Auto Loader ingests `landing/backfill/` through the same Bronze → Silver → Gold path.
-3. **Cost is the download, not the rows:** 3 days × 120 s ≈ 2 160 files ≈ 13.5 GB pulled,
-   ~140 MB landed, ~90 min runtime. **Resumable** — re-run to continue after a quota stop.
-   Scale up (`backfill_n_days`, tighter `backfill_hours`) once the small run is proven.
-4. Even ~14–21 days of near-field data gives thousands of labelled arrivals for M1 and enough
-   15-min demand bins to fine-tune the M2 forecast model.
+**Tooling:** `scripts/backfill_local.py` (run **off Databricks** — the ~6 MB/file download over
+10s of GB would blow the Free Edition serverless quota) and the mirror notebook `src/backfill.py`
+(job `skywatch_backfill`, for a paid workspace). Both: for each target day at
+`--interval` cadence, download the nearest snapshot, keep aircraft within `--radius-nm` of the
+field, write it wrapped in the **poller's envelope** (`source='backfill'`). 6 MB file → ~100 KB
+landed. Resumable (one output per timestamp). Then upload `backfill/` to the landing Volume and
+`--full-refresh-all` the pipeline.
+
+- 3 months × 60 s ≈ 4 320 files ≈ 28 GB pulled, ~350 MB landed, ~2 h local.
+
+**Implication for the models:**
+- **M1 (time-to-touchdown):** unaffected — each monthly day ≈ 1 300 KATL arrivals with dense
+  tracks; 3–6 days = 4 000–8 000 labelled arrivals across seasons/weekdays. Ample.
+- **M2 (demand forecast):** the roadmap assumed ~90 *continuous* days for day-to-day
+  autocorrelation — **not available from this source.** Options, decided in Phase 3:
+  (a) reframe as a *within-day* forecast (each monthly day = one independent 24 h × 96-bin
+  profile — foundation models handle disjoint short series); (b) lean on live-poller data
+  accumulated over weeks for the continuous piece, using the monthly backfill for seasonal
+  context. Near-term demand (0–45 min) still comes from aggregating M1's live ETAs regardless.
 
 ### 5.3 Medallion layers
 

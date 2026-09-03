@@ -78,21 +78,23 @@ variables:
     description: PAUSED or UNPAUSED — the poller schedule state on deploy.
     default: PAUSED
 
-  # --- Historical backfill (src/backfill.py + resources/skywatch.backfill.job.yml) ---
-  backfill_start_date:
-    description: First day to backfill, YYYY-MM-DD. Blank = (today UTC − backfill_n_days).
+  # --- Historical backfill (src/backfill.py + scripts/backfill_local.py) ---
+  # readsb-hist only has the 1st of each month. On Free Edition run scripts/backfill_local.py
+  # off-platform instead of this job (the ~6 MB/file download would blow the quota).
+  backfill_dates:
+    description: Explicit YYYY-MM-DD list to backfill. Blank = backfill_months most recent 1st-of-month.
     default: ""
-  backfill_n_days:
-    description: Number of consecutive days to backfill.
+  backfill_months:
+    description: Number of recent 1st-of-month days to backfill.
     default: "3"
   backfill_interval_s:
-    description: Target seconds between snapshots (>= 120 to stay light on the free archive).
-    default: "120"
+    description: Target seconds between snapshots.
+    default: "60"
   backfill_radius_nm:
-    description: Keep only aircraft within this many nm of the airport (tight — near-field).
-    default: "80"
+    description: Keep only aircraft within this many nm of the airport (near-field).
+    default: "100"
   backfill_hours:
-    description: 'UTC hour range to include, e.g. "11-23". Blank = all 24 h.'
+    description: 'UTC hour range to include, e.g. "10-04" (wraps). Blank = all 24 h.'
     default: ""
 
 targets:
