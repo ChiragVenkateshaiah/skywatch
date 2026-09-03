@@ -236,36 +236,46 @@ plus poll-envelope metadata (`snapshot_ts`, `apt_icao`, `_ingest_file`, `_ingest
 per-aircraft object is kept as the `report` struct. Append-only.
 
 **Silver** `skywatch.stream.silver_positions` — one typed, deduped row per aircraft report
-(watermark + drop-duplicates on `icao, snapshot_ts`). Fields:
+(watermark + drop-duplicates on `icao, snapshot_ts`). **Point-wise features only.** Built —
+column set finalised from the Phase 1 EDA:
 
 | Field | Source / derivation |
 |---|---|
-| `hex, flight, r, t, category` | passthrough |
-| `lat, lon, alt_baro, gs, track, squawk, emergency` | passthrough (typed) |
-| `snapshot_ts` | from snapshot filename |
-| `vertical_rate` | Δ`alt_baro` / Δt over consecutive reports of the same `hex` (use feed's `baro_rate` if present) |
-| `turn_rate` | Δ`track` / Δt |
-| `dist_to_apt_nm`, `bearing_to_apt` | great-circle from `(lat,lon)` to airport reference point |
-| `track_error_deg` | `angular_diff(track, bearing_to_apt)` |
-| `phase` | rule on `alt_baro` + `vertical_rate` + `gs`: climb / cruise / descent / approach / ground |
+| `icao, callsign, registration, ac_type, category` | passthrough (typed; `callsign` trimmed) |
+| `lat, lon, has_position` | passthrough; `has_position` = lat is not null |
+| `alt_ft` | `alt_baro`, with the string `"ground"` → 0 |
+| `alt_geom_ft` | `alt_geom` (94.9% coverage) |
+| `gs_kt, track_deg, squawk, emergency` | passthrough (typed) |
+| `baro_rate_fpm, geom_rate_fpm` | passthrough |
+| `vertical_rate_fpm`, `vertical_rate_src` | `coalesce(baro_rate, geom_rate)` + which one (`baro`/`geom`/null). Δalt/Δt fill for the ~5% with neither → Gold |
+| `sel_altitude_ft` | `nav_altitude_mcp` — selected altitude, a descent-intent signal (76.3%) |
+| `sel_heading_deg` | `nav_heading` — selected heading (54.9%) |
+| `nic, rc, seen_s, seen_pos_s` | position quality + message/position staleness |
+| `dist_to_apt_nm`, `bearing_to_apt` | great-circle from `(lat,lon)` to the airport reference point |
+| `heading_err_deg` | `angular_diff(track_deg, bearing_to_apt)` — ~0 = pointed at the field |
+| `is_grounded` | `alt_ft ≤ 0 AND gs_kt < 50` (EDA: ground alt alone is noisy) |
+| `phase` | **point-wise** rule on `vertical_rate_fpm` + `alt_ft`: ground / climb / descent / cruise / level / unknown. Trajectory phases (approach, go-around) are a Gold job |
 
-**Gold**
+**Gold** — batch job `src/build_gold.py`, built once we have a real arrival wave to validate
+touchdown detection against (next Free Edition quota window):
 
 | Table | Contents |
 |---|---|
-| `gold_touchdowns` | one row per detected landing: `hex, flight, apt, touchdown_ts, runway_guess` |
+| `gold_tracks` | per `icao` trajectory, ordered, with Δt, derived vertical rate, along-track closure, segment id (gap > 3 min splits) |
+| `gold_touchdowns` | one row per detected landing: `icao, callsign, apt, touchdown_ts` |
 | `gold_arrival_tracks` | inbound trajectory segments joined to their touchdown (the M1 training set) |
 | `gold_demand_15m` | `bin_start_ts, arrivals_in_bin` — the M2 series |
-| `gold_congestion` | every minute: inbound aircraft count within 50 / 100 / 200 / 300 NM rings, mean gs/alt per ring |
-| `gold_holding` | flights currently in a racetrack pattern near the airport |
+| `gold_congestion` | per minute: inbound aircraft count within 40 / 100 / 200 / 250 NM rings, mean gs/alt per ring. "Inbound" = 3+ consecutive decreasing-`dist_to_apt_nm` obs (EDA: single-snapshot heuristic is unreliable) |
+| `gold_holding` | racetrack detection — circular-variance heading spread over a rolling window in a small bounding box near the airport (reuses the metric from `src/skywatch_lite.py`) |
 | `gold_kpis` | dashboard tiles: current inbound count, next-hour predicted arrivals, AAR headroom, mean holding time |
 
 ### 5.4 Labelling logic (self-supervised — no annotation)
 
-**Touchdown event.** For a given `hex`, walking its reports in time order, emit a touchdown when:
-`dist_to_apt_nm < 3` **and** `alt_baro` within ~500 ft of field elevation **and** `gs` dropped
-below ~80 kt **and** the aircraft was in `approach` phase in the preceding minutes. `touchdown_ts`
-= first report meeting the condition.
+**Touchdown event.** For a given `icao`, walking its reports in time order, emit a touchdown at
+the first report where `dist_to_apt_nm < 3` **and** `alt_ft` within ~500 ft of field elevation
+(KATL 1026 ft) **and** `gs_kt` between ~30 and ~160 **and** the aircraft was descending through
+3000 ft AGL in the preceding few minutes. *Detection thresholds to be tuned against the first
+captured arrival wave — the 4.5-min EDA sample contained no completed landings.*
 
 **Arrival airport.** The airport whose reference point the trajectory converges on during
 descent (nearest known airport to the touchdown point, sanity-checked against approach track).
@@ -423,11 +433,12 @@ Each phase is independently demoable.
 - Move the workspace host in `databricks.yml` to a bundle variable / profile (it is currently committed).
 
 ### Phase 1 — Real-time ingestion & medallion  *(data → insight)*
-- Poller job → UC Volume; Auto Loader → Bronze.
-- Silver with derived kinematics + airport geometry + phase.
-- Gold: touchdown detection, demand series, congestion rings, holding flags.
+- ✅ Poller job (adsb.lol) → UC Volume; Auto Loader → Bronze.
+- ✅ **[Genie Code]** EDA pass on the first sample (`SkyWatch EDA: Bronze & Silver Profiling (KATL)`).
+- ✅ Silver with kinematics + airport geometry + point-wise phase (column set from the EDA).
+- ⏳ Collect a real arrival wave (~60–90 min) — blocked on Free Edition daily quota.
+- Gold batch job: `gold_tracks`, touchdown detection (tune vs the arrival wave), demand series, congestion rings, holding.
 - Historical backfill job (~90 days, minute cadence, spatially pre-filtered).
-- **[Genie Code]** EDA pass to validate silver/gold before freezing schemas.
 - **[Genie Code]** AI/BI dashboard v1 (no predictions yet — just the live picture); capture into repo.
 - Genie space v1 (Claude supplies config).
 - **Platform surface:** Lakeflow Declarative Pipelines, Auto Loader, Structured Streaming, UC Volumes, AI/BI, Genie, Genie Code.
