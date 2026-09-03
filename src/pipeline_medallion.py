@@ -29,8 +29,13 @@ SCHEMA_LOCATION = spark.conf.get(
 EARTH_RADIUS_NM = 3440.065
 
 
+def _cols(*names):
+    return tuple(F.col(n) if isinstance(n, str) else n for n in names)
+
+
 def _great_circle_nm(lat1, lon1, lat2, lon2):
     """Haversine distance in nautical miles, as a Column expression."""
+    lat1, lon1, lat2, lon2 = _cols(lat1, lon1, lat2, lon2)
     p1, p2 = F.radians(lat1), F.radians(lat2)
     dphi = F.radians(lat2 - lat1)
     dlam = F.radians(lon2 - lon1)
@@ -40,6 +45,7 @@ def _great_circle_nm(lat1, lon1, lat2, lon2):
 
 def _initial_bearing_deg(lat1, lon1, lat2, lon2):
     """Initial great-circle bearing from point 1 to point 2, degrees 0..360."""
+    lat1, lon1, lat2, lon2 = _cols(lat1, lon1, lat2, lon2)
     p1, p2 = F.radians(lat1), F.radians(lat2)
     dlam = F.radians(lon2 - lon1)
     y = F.sin(dlam) * F.cos(p2)
