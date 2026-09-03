@@ -451,8 +451,13 @@ Each phase is independently demoable.
 - ✅ **[Genie Code]** EDA pass on the first sample (`SkyWatch EDA: Bronze & Silver Profiling (KATL)`).
 - ✅ Silver with kinematics + airport geometry + point-wise phase (column set from the EDA).
 - ✅ Gold batch job `src/build_gold.py` (SQL-warehouse CTAS, no pipeline run): `gold_tracks`, `gold_congestion`, `gold_holding`, `gold_touchdowns`, `gold_kpis`. First sample caught 6 landings + realistic ring congestion.
-- ⏳ Collect a real arrival wave (~60–90 min) → tune touchdown + holding thresholds; build `gold_demand_15m` + `gold_arrival_tracks` (M2 series / M1 training set).
-- ✅ Historical backfill job `src/backfill.py` (`skywatch_backfill`) — built, resumable, near-field filtered. ⏳ Not yet run (13.5 GB / 90 min for the default 3-day window).
+- ✅ `gold_arrival_tracks` (M1 training set) + `gold_demand_15m` (M2 series) built.
+- ✅ Historical backfill — 3 full days (2026-07-01 / 08-01 / 09-01) downloaded off-platform via `scripts/backfill_local.py` (concurrent, 25 min), uploaded, ingested via `--full-refresh-all`.
+  - Silver ≈ 975 K rows / ~10 K aircraft · `gold_touchdowns` **3,214 landings** (~1,080/day, matches KATL) · `gold_arrival_tracks` **71,600 rows / 3,141 arrivals** · `gold_demand_15m` **384 bins**.
+  - Label sanity: avg `minutes_to_touchdown` 5.0 → 22.3 across the 0–10 → 75–100 nm bands; feature nulls < 1.1%. Demand curve shows the real ATL overnight trough + afternoon banks.
+- ⏳ Still open: tune touchdown/holding thresholds; a longer *live* collection for day-to-day continuity.
+
+**Phase 1 is functionally complete** — streaming medallion + validated M1 training set + M2 series + dashboard + Genie space. Next: **Phase 2, Model 1.**
 - ✅ **[Genie Code]** AI/BI dashboard v1 — "SkyWatch — KATL Arrival Picture" (KPIs, live map, congestion-by-ring, ETA histogram, landings + circling tables). Definition captured at `src/skywatch_arrival_dashboard.lvdash.json`. *Not yet bundle-managed — `bundle deploy` wanted to recreate it (new URL); bind + manage as IaC once v1 churn settles.*
 - ✅ Genie space v1 — "SkyWatch — KATL Arrival Manager" (6 tables, 6 starred questions).
 - **Platform surface:** Lakeflow Declarative Pipelines, Auto Loader, Structured Streaming, UC Volumes, AI/BI, Genie, Genie Code.
