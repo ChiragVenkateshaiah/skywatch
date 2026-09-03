@@ -19,12 +19,10 @@
 import dlt
 from pyspark.sql import functions as F
 
-LANDING_PATH = spark.conf.get(
-    "skywatch.landing_path", "/Volumes/skywatch/core/landing/airplaneslive"
-)
-SCHEMA_LOCATION = spark.conf.get(
-    "skywatch.schema_location", "/Volumes/skywatch/core/landing/_autoloader/medallion"
-)
+# Watch the whole landing Volume so both the live poller (`adsblol/`) and the historical
+# backfill (`backfill/`) flow in. The `*.json` glob keeps Auto Loader off any state/metadata
+# files; schema tracking is left to the DLT pipeline's managed storage.
+LANDING_ROOT = spark.conf.get("skywatch.landing_root", "/Volumes/skywatch/core/landing")
 
 EARTH_RADIUS_NM = 3440.065
 
@@ -66,8 +64,9 @@ def _angular_diff_deg(a, b):
 # COMMAND ----------
 @dlt.table(
     name="bronze_aircraft",
-    comment="Raw airplanes.live /v2/point responses, aircraft array exploded. "
-            "One row per aircraft per poll; full per-aircraft object kept as `report`.",
+    comment="Raw ADS-B v2 snapshots (live poller + historical backfill), aircraft array "
+            "exploded. One row per aircraft per snapshot; full per-aircraft object kept as "
+            "`report`. `source` distinguishes 'adsblol' from 'backfill'.",
     table_properties={"quality": "bronze"},
 )
 def bronze_aircraft():
@@ -75,10 +74,10 @@ def bronze_aircraft():
         spark.readStream.format("cloudFiles")
         .option("cloudFiles.format", "json")
         .option("cloudFiles.inferColumnTypes", "true")
-        .option("cloudFiles.schemaLocation", SCHEMA_LOCATION)
         .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
+        .option("pathGlobFilter", "*.json")
         .option("multiLine", "true")
-        .load(LANDING_PATH)
+        .load(LANDING_ROOT)
     )
     return (
         raw.select(

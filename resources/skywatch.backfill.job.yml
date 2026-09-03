@@ -1,0 +1,36 @@
+# SkyWatch — historical backfill job.
+# Downloads ADS-B Exchange readsb-hist snapshots for past days, filters to the airport area,
+# and lands them for the medallion pipeline. Serverless. No schedule — run on demand:
+#   databricks bundle run skywatch_backfill -t dev
+# Resumable: re-run to continue where a previous run stopped (existing outputs are skipped).
+# Tune the window with the backfill_* bundle variables.
+
+resources:
+  jobs:
+    skywatch_backfill:
+      name: skywatch-backfill
+      max_concurrent_runs: 1
+      timeout_seconds: 14400            # 4 h — it is a large sequential download
+      tags:
+        project: skywatch
+        component: ingestion
+
+      tasks:
+        - task_key: backfill
+          notebook_task:
+            notebook_path: ../src/backfill.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.core_schema}
+              volume: ${var.landing_volume}
+              apt_icao: ${var.apt_icao}
+              apt_lat: ${var.apt_lat}
+              apt_lon: ${var.apt_lon}
+              radius_nm: ${var.backfill_radius_nm}
+              start_date: ${var.backfill_start_date}
+              n_days: ${var.backfill_n_days}
+              interval_seconds: ${var.backfill_interval_s}
+              hours: ${var.backfill_hours}
+
+      queue:
+        enabled: true

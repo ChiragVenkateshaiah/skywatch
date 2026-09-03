@@ -18,5 +18,5 @@ resources:
             path: ../src/pipeline_medallion.py
 
       configuration:
-        skywatch.landing_path: /Volumes/${var.catalog}/${var.core_schema}/${var.landing_volume}/${var.source_name}
-        skywatch.schema_location: /Volumes/${var.catalog}/${var.core_schema}/${var.landing_volume}/_autoloader/medallion
+        # whole landing Volume — picks up both adsblol/ (poller) and backfill/ (historical)
+        skywatch.landing_root: /Volumes/${var.catalog}/${var.core_schema}/${var.landing_volume}

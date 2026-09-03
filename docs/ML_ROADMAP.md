@@ -214,16 +214,20 @@ bundle variable — swapping to any v2-compatible host is a one-line change + re
 
 ### 5.2 Historical backfill (for training)
 
-The `readsb-hist` archive at `samples.adsbexchange.com/readsb-hist/<yyyy>/<mm>/<dd>/` has one
-global snapshot every ~5 s, for individual days going back years. For training we need calendar
-coverage, not global coverage:
+`src/backfill.py` (job `skywatch_backfill`, on demand). The `readsb-hist` archive at
+`samples.adsbexchange.com/readsb-hist/<yyyy>/<mm>/<dd>/` has one global snapshot every ~5 s,
+served as plain JSON (~6 MB / 13.5k aircraft each), for individual days going back years.
 
-1. For each of ~60–90 historical days, download **one snapshot per minute** (1,440 files/day,
-   not 17k), and **spatially pre-filter** each to the airport's bounding box before writing —
-   keeps the training Volume small.
-2. Land the filtered rows through the same Auto Loader → Bronze path (a `source='backfill'`
-   tag distinguishes them).
-3. ~90 days at KATL ≈ 170k labelled arrivals for M1 and ≈ 8,600 demand bins for M2.
+1. For each target day, at a coarse cadence (`backfill_interval_s`, default 120 s), download
+   the nearest snapshot, keep only aircraft within `backfill_radius_nm` (default 80 nm) of the
+   field, and write it wrapped in the **same envelope the poller uses** (`source='backfill'`).
+   A 6 MB global file → ~65 KB landed.
+2. Auto Loader ingests `landing/backfill/` through the same Bronze → Silver → Gold path.
+3. **Cost is the download, not the rows:** 3 days × 120 s ≈ 2 160 files ≈ 13.5 GB pulled,
+   ~140 MB landed, ~90 min runtime. **Resumable** — re-run to continue after a quota stop.
+   Scale up (`backfill_n_days`, tighter `backfill_hours`) once the small run is proven.
+4. Even ~14–21 days of near-field data gives thousands of labelled arrivals for M1 and enough
+   15-min demand bins to fine-tune the M2 forecast model.
 
 ### 5.3 Medallion layers
 
@@ -439,7 +443,7 @@ Each phase is independently demoable.
 - ✅ Silver with kinematics + airport geometry + point-wise phase (column set from the EDA).
 - ✅ Gold batch job `src/build_gold.py` (SQL-warehouse CTAS, no pipeline run): `gold_tracks`, `gold_congestion`, `gold_holding`, `gold_touchdowns`, `gold_kpis`. First sample caught 6 landings + realistic ring congestion.
 - ⏳ Collect a real arrival wave (~60–90 min) → tune touchdown + holding thresholds; build `gold_demand_15m` + `gold_arrival_tracks` (M2 series / M1 training set).
-- Historical backfill job (~90 days, minute cadence, spatially pre-filtered).
+- ✅ Historical backfill job `src/backfill.py` (`skywatch_backfill`) — built, resumable, near-field filtered. ⏳ Not yet run (13.5 GB / 90 min for the default 3-day window).
 - ✅ **[Genie Code]** AI/BI dashboard v1 — "SkyWatch — KATL Arrival Picture" (KPIs, live map, congestion-by-ring, ETA histogram, landings + circling tables). Definition captured at `src/skywatch_arrival_dashboard.lvdash.json`. *Not yet bundle-managed — `bundle deploy` wanted to recreate it (new URL); bind + manage as IaC once v1 churn settles.*
 - ✅ Genie space v1 — "SkyWatch — KATL Arrival Manager" (6 tables, 6 starred questions).
 - **Platform surface:** Lakeflow Declarative Pipelines, Auto Loader, Structured Streaming, UC Volumes, AI/BI, Genie, Genie Code.
