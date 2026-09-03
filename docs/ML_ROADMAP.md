@@ -441,8 +441,12 @@ Each phase is independently demoable.
 - ⏳ Collect a real arrival wave (~60–90 min) → tune touchdown + holding thresholds; build `gold_demand_15m` + `gold_arrival_tracks` (M2 series / M1 training set).
 - Historical backfill job (~90 days, minute cadence, spatially pre-filtered).
 - ✅ **[Genie Code]** AI/BI dashboard v1 — "SkyWatch — KATL Arrival Picture" (KPIs, live map, congestion-by-ring, ETA histogram, landings + circling tables). Definition captured at `src/skywatch_arrival_dashboard.lvdash.json`. *Not yet bundle-managed — `bundle deploy` wanted to recreate it (new URL); bind + manage as IaC once v1 churn settles.*
-- Genie space v1 (Claude supplies config).
+- ✅ Genie space v1 — "SkyWatch — KATL Arrival Manager" (6 tables, 6 starred questions).
 - **Platform surface:** Lakeflow Declarative Pipelines, Auto Loader, Structured Streaming, UC Volumes, AI/BI, Genie, Genie Code.
+
+**Phase 1 remaining** (both need a Free Edition quota window):
+- Passive ~60–90 min poller collection over a US-evening ATL bank → tune `gold_touchdowns` / `gold_holding` thresholds, build `gold_demand_15m` + `gold_arrival_tracks`.
+- Historical backfill job (~90 days, 1 snapshot/min, spatially pre-filtered) — the training-data foundation for Phase 2.
 
 ### Phase 2 — Model 1: time-to-touchdown  *(model)*
 - Feature Engineering tables for M1.
