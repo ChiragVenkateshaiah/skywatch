@@ -30,10 +30,15 @@ variables:
     description: Unity Catalog catalog for the project.
     default: skywatch
   core_schema:
-    description: Schema for landing / bronze / silver / gold.
+    description: Schema holding the landing Volume (and the older SkyWatch Lite demo tables).
     default: core
+  stream_schema:
+    description: >-
+      Schema for the streaming Arrival Manager pipeline — bronze / silver / gold.
+      ("live" is a reserved UC schema name, hence "stream".)
+    default: stream
   landing_volume:
-    description: UC Volume that raw poller output lands in.
+    description: UC Volume that raw poller output lands in (lives in core_schema).
     default: landing
 
   # --- Target airport (Arrival Manager v1 = KATL) ---

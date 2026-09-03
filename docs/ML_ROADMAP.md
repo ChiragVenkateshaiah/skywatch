@@ -227,11 +227,16 @@ coverage, not global coverage:
 
 ### 5.3 Medallion layers
 
-**Bronze** `skywatch.core.bronze_aircraft` — raw aircraft objects exploded from each snapshot,
-plus `ingest_ts`, `snapshot_ts`, `source`. Append-only.
+Schema layout: the raw landing Volume stays at `skywatch.core.landing` (shared infra); the
+streaming pipeline writes its tables to **`skywatch.stream.*`** (`live` is a reserved UC schema
+name); models go to `skywatch.ml.*`. The older SkyWatch Lite demo keeps `skywatch.core.*`.
 
-**Silver** `skywatch.core.silver_positions` — one typed, deduped row per aircraft report
-(watermark + drop-duplicates on `hex, snapshot_ts`). Fields:
+**Bronze** `skywatch.stream.bronze_aircraft` — raw aircraft objects exploded from each snapshot,
+plus poll-envelope metadata (`snapshot_ts`, `apt_icao`, `_ingest_file`, `_ingest_ts`); the full
+per-aircraft object is kept as the `report` struct. Append-only.
+
+**Silver** `skywatch.stream.silver_positions` — one typed, deduped row per aircraft report
+(watermark + drop-duplicates on `icao, snapshot_ts`). Fields:
 
 | Field | Source / derivation |
 |---|---|
@@ -351,7 +356,7 @@ enough to act (≥ 30 min lead)?
 - **Scoring job** (scheduled, every N min, `Trigger.AvailableNow`): loads the `@champion`
   models from the UC registry with `mlflow.pyfunc.load_model`, computes the airport-state
   features inline, scores every current inbound and the demand series, and **writes results to
-  `skywatch.core.predictions` / `skywatch.core.demand_forecast` Delta tables**.
+  `skywatch.stream.predictions` / `skywatch.stream.demand_forecast` Delta tables**.
 - The **dashboard and App read those Delta tables** via the SQL warehouse — no endpoint needed.
 - **Interactive "click-to-predict" in the App** without an endpoint: the App process (Python)
   loads the M1 model from the UC registry **once at startup** and calls `.predict()` in-process
@@ -414,7 +419,7 @@ Each phase is independently demoable.
 
 ### Phase 0 — Foundations
 - Provision workspace (Free Edition to start; note the paid-workspace decision point).
-- Extend the Asset Bundle: `skywatch.ml` schema, Volumes for landing + backfill, new job/pipeline definitions.
+- Extend the Asset Bundle: `skywatch.stream` + `skywatch.ml` schemas, landing Volume in `skywatch.core`, new job/pipeline definitions. *(done: poller job, thin-slice medallion)*
 - Move the workspace host in `databricks.yml` to a bundle variable / profile (it is currently committed).
 
 ### Phase 1 — Real-time ingestion & medallion  *(data → insight)*

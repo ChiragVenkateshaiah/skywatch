@@ -9,7 +9,7 @@ resources:
       name: skywatch-medallion
       serverless: true
       catalog: ${var.catalog}
-      schema: ${var.core_schema}
+      schema: ${var.stream_schema}
       continuous: false
       photon: true
 
