@@ -440,7 +440,7 @@ Each phase is independently demoable.
 - ✅ Gold batch job `src/build_gold.py` (SQL-warehouse CTAS, no pipeline run): `gold_tracks`, `gold_congestion`, `gold_holding`, `gold_touchdowns`, `gold_kpis`. First sample caught 6 landings + realistic ring congestion.
 - ⏳ Collect a real arrival wave (~60–90 min) → tune touchdown + holding thresholds; build `gold_demand_15m` + `gold_arrival_tracks` (M2 series / M1 training set).
 - Historical backfill job (~90 days, minute cadence, spatially pre-filtered).
-- **[Genie Code]** AI/BI dashboard v1 (no predictions yet — just the live picture); capture into repo.
+- ✅ **[Genie Code]** AI/BI dashboard v1 — "SkyWatch — KATL Arrival Picture" (KPIs, live map, congestion-by-ring, ETA histogram, landings + circling tables). Definition captured at `src/skywatch_arrival_dashboard.lvdash.json`. *Not yet bundle-managed — `bundle deploy` wanted to recreate it (new URL); bind + manage as IaC once v1 churn settles.*
 - Genie space v1 (Claude supplies config).
 - **Platform surface:** Lakeflow Declarative Pipelines, Auto Loader, Structured Streaming, UC Volumes, AI/BI, Genie, Genie Code.
 
