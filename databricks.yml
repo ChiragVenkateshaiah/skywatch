@@ -14,14 +14,52 @@ sync:
     - "*.md"
     - ".git/**"
 
-# Variables you may want to tweak without editing the notebook.
+# Variables you may want to tweak without editing the notebooks.
 variables:
+
+  # --- Historical pipeline (src/skywatch_lite.py) ---
   date_path:
     description: ADS-B Exchange sample archive date (yyyy/mm/dd) with data present.
     default: "2024/06/01"
   n_files:
     description: Number of 5-second snapshots to ingest.
     default: "60"
+
+  # --- Unity Catalog layout (shared) ---
+  catalog:
+    description: Unity Catalog catalog for the project.
+    default: skywatch
+  core_schema:
+    description: Schema for landing / bronze / silver / gold.
+    default: core
+  landing_volume:
+    description: UC Volume that raw poller output lands in.
+    default: landing
+
+  # --- Target airport (Arrival Manager v1 = KATL) ---
+  apt_icao:
+    description: ICAO code of the target airport.
+    default: KATL
+  apt_lat:
+    description: Airport reference latitude.
+    default: "33.6407"
+  apt_lon:
+    description: Airport reference longitude.
+    default: "-84.4277"
+  radius_nm:
+    description: Capture radius around the airport, nm (airplanes.live max 250).
+    default: "250"
+
+  # --- Live poller (src/poller.py + resources/skywatch.poller.job.yml) ---
+  poll_seconds:
+    description: Total duration of one polling burst. 0 = single poll per run.
+    default: "270"
+  poll_interval_seconds:
+    description: Gap between polls within a burst (>= 1 for the API rate limit).
+    default: "15"
+  poller_pause_status:
+    description: PAUSED or UNPAUSED — the poller schedule state on deploy.
+    default: PAUSED
 
 targets:
   dev:

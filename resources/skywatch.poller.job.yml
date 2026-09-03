@@ -1,0 +1,40 @@
+# SkyWatch — live ADS-B poller job.
+# One run = one polling burst (see src/poller.py). Serverless (no job_clusters block).
+#
+# Deployed PAUSED by default so it does not start burning the Free Edition usage quota on
+# `bundle deploy`. Unpause when you want to collect:
+#   databricks jobs update --json '{"job_id": <id>, "new_settings": {...}}'   # or the UI
+# or flip the `poller_pause_status` variable to UNPAUSED and redeploy.
+
+resources:
+  jobs:
+    skywatch_poller:
+      name: skywatch-poller
+      max_concurrent_runs: 1
+      tags:
+        project: skywatch
+        component: ingestion
+
+      tasks:
+        - task_key: poll
+          notebook_task:
+            notebook_path: ../src/poller.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.core_schema}
+              volume: ${var.landing_volume}
+              apt_icao: ${var.apt_icao}
+              apt_lat: ${var.apt_lat}
+              apt_lon: ${var.apt_lon}
+              radius_nm: ${var.radius_nm}
+              poll_seconds: ${var.poll_seconds}
+              poll_interval_seconds: ${var.poll_interval_seconds}
+              source_name: airplaneslive
+
+      schedule:
+        quartz_cron_expression: "0 0/5 * * * ?"   # every 5 minutes
+        timezone_id: UTC
+        pause_status: ${var.poller_pause_status}
+
+      queue:
+        enabled: true
