@@ -467,9 +467,10 @@ Each phase is independently demoable.
 - Historical backfill job (~90 days, 1 snapshot/min, spatially pre-filtered) — the training-data foundation for Phase 2.
 
 ### Phase 2 — Model 1: time-to-touchdown  *(model)*
-- Feature Engineering tables for M1.
-- AutoML baseline → LightGBM → Hyperopt tuning, all in MLflow.
-- Time-based split, MAE-by-distance-band evaluation, register to UC.
+- ✅ `src/train_eta.py` (`skywatch_train_eta`): features from `gold_arrival_tracks`, LightGBM + Hyperopt (24 trials), time-based split, MAE-by-band eval, registers `skywatch.ml.eta_touchdown`.
+- ✅ **v1 trained** (test day 2026-09-01): **MAE 1.24 min** (0–20 nm: 1.02, 70–100 nm: 1.51) vs 5.86 min baseline — **79% better**. RMSE 1.73. `@champion` + `@challenger`.
+- ⏳ Scoring job → `skywatch.stream.predictions` Delta table (batch — no serving on Free Edition).
+- ⏳ Retrain on more test days; AutoML cross-check (`run_automl=true`).
 - Scoring job → `predictions` Delta table.
 - **[Genie Code]** dashboard gains the arrival-sequence table and accuracy tile; re-capture.
 - **Platform surface:** Feature Engineering in UC, AutoML, MLflow, Hyperopt, UC Model Registry, `mlflow.pyfunc` batch scoring.
