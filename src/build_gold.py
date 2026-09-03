@@ -13,6 +13,8 @@
 # MAGIC | `gold_congestion` | minute × ring | inbound / total counts, mean alt / gs / ETA per ring |
 # MAGIC | `gold_holding` | one row per circling aircraft | circular-variance heading spread in a small box — currently flags *any* circling (light a/c, military); airline-hold tuning is a TODO |
 # MAGIC | `gold_touchdowns` | one row per landing | **first-cut thresholds** — tune against a full arrival wave |
+# MAGIC | `gold_arrival_tracks` | one row per (aircraft, time) pre-touchdown | the **Model 1** training set; label `minutes_to_touchdown` |
+# MAGIC | `gold_demand_15m` | one row per 15-min bin per active day | the **Model 2** series; zero bins explicit |
 # MAGIC | `gold_kpis` | one row | dashboard headline numbers |
 
 # COMMAND ----------
@@ -181,6 +183,85 @@ WHERE min_dist_nm < 3 AND min_alt_ft <= {APT_ELEV_FT} + 500 AND descent_reports 
 print(spark.table(f"{S}.gold_touchdowns").count(), "rows")
 
 # COMMAND ----------
+# MAGIC %md
+# MAGIC ## `gold_arrival_tracks` — the Model 1 training set
+# MAGIC Every airborne report of a segment that ends in a detected touchdown, labelled with
+# MAGIC `minutes_to_touchdown`. One row = one (aircraft, time) training example. Segments have no
+# MAGIC internal gap > 3 min (that splits `seg_id`), so the label is trustworthy. Reports 0.5–40 min
+# MAGIC before touchdown are kept — beyond that the aircraft was usually not yet on approach.
+
+# COMMAND ----------
+spark.sql(f"""
+CREATE OR REPLACE TABLE {S}.gold_arrival_tracks AS
+WITH inbound_ct AS (
+  SELECT minute_ts, apt_icao, sum(n_inbound) AS n_inbound_all_rings
+  FROM {S}.gold_congestion GROUP BY 1, 2
+)
+SELECT
+  t.seg_id, t.icao, t.callsign, t.ac_type, t.apt_icao,
+  t.snapshot_ts,
+  td.touchdown_ts,
+  round((unix_timestamp(td.touchdown_ts) - unix_timestamp(t.snapshot_ts)) / 60.0, 3)
+                                                     AS minutes_to_touchdown,
+  -- features
+  t.dist_to_apt_nm, t.bearing_to_apt, t.heading_err_deg,
+  t.alt_ft, t.alt_geom_ft, t.sel_altitude_ft,
+  t.gs_kt, t.track_deg, t.vrate_fpm, t.turn_rate_dps, t.closure_nm, t.phase,
+  hour(t.snapshot_ts)                                 AS hour_utc,
+  dayofweek(t.snapshot_ts)                            AS dow,
+  coalesce(c.n_inbound_all_rings, 0)                  AS airport_inbound_count
+FROM {S}.gold_tracks t
+JOIN {S}.gold_touchdowns td ON td.seg_id = t.seg_id
+LEFT JOIN inbound_ct c
+  ON c.minute_ts = date_trunc('MINUTE', t.snapshot_ts) AND c.apt_icao = t.apt_icao
+WHERE t.snapshot_ts < td.touchdown_ts
+  AND NOT t.is_grounded
+  AND t.dist_to_apt_nm IS NOT NULL
+  AND (unix_timestamp(td.touchdown_ts) - unix_timestamp(t.snapshot_ts)) BETWEEN 30 AND 2400
+""")
+_at = spark.table(f"{S}.gold_arrival_tracks")
+print(_at.count(), "training rows |",
+      _at.select("seg_id").distinct().count(), "arrivals")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## `gold_demand_15m` — the Model 2 series
+# MAGIC Touchdowns bucketed into 15-minute bins. A full 96-bin spine is generated for every date
+# MAGIC that has ≥ 1 arrival, so zero-arrival bins are explicit (the archive only has the 1st of
+# MAGIC each month, so the series is a set of independent full days, not one continuous timeline).
+
+# COMMAND ----------
+spark.sql(f"""
+CREATE OR REPLACE TABLE {S}.gold_demand_15m AS
+WITH td AS (
+  SELECT apt_icao,
+         timestamp_seconds(floor(unix_timestamp(touchdown_ts) / 900) * 900) AS bin_start_ts
+  FROM {S}.gold_touchdowns
+  WHERE touchdown_ts IS NOT NULL
+),
+counts AS (SELECT apt_icao, bin_start_ts, count(*) AS arrivals FROM td GROUP BY 1, 2),
+active_dates AS (SELECT DISTINCT apt_icao, to_date(bin_start_ts) AS d FROM counts),
+spine AS (
+  SELECT apt_icao,
+         explode(sequence(to_timestamp(d),
+                          to_timestamp(d) + INTERVAL 1 DAY - INTERVAL 15 MINUTES,
+                          INTERVAL 15 MINUTES)) AS bin_start_ts
+  FROM active_dates
+)
+SELECT
+  sp.apt_icao, sp.bin_start_ts,
+  coalesce(c.arrivals, 0)    AS arrivals,
+  hour(sp.bin_start_ts)      AS hour_utc,
+  dayofweek(sp.bin_start_ts) AS dow,
+  to_date(sp.bin_start_ts)   AS bin_date
+FROM spine sp
+LEFT JOIN counts c ON c.apt_icao = sp.apt_icao AND c.bin_start_ts = sp.bin_start_ts
+""")
+_d = spark.table(f"{S}.gold_demand_15m")
+print(_d.count(), "bins |", _d.selectExpr("sum(arrivals)").first()[0], "total arrivals |",
+      _d.select("bin_date").distinct().count(), "days")
+
+# COMMAND ----------
 # MAGIC %md ## `gold_kpis` — dashboard headline numbers
 
 # COMMAND ----------
@@ -205,6 +286,7 @@ SELECT
 # MAGIC %md ## Validation
 
 # COMMAND ----------
-for t in ["gold_tracks", "gold_congestion", "gold_holding", "gold_touchdowns", "gold_kpis"]:
-    print(f"{t:18} {spark.table(f'{S}.{t}').count():>8} rows")
+for t in ["gold_tracks", "gold_congestion", "gold_holding", "gold_touchdowns",
+          "gold_arrival_tracks", "gold_demand_15m", "gold_kpis"]:
+    print(f"{t:20} {spark.table(f'{S}.{t}').count():>8} rows")
 display(spark.table(f"{S}.gold_kpis"))
