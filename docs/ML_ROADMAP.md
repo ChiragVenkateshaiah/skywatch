@@ -256,8 +256,9 @@ column set finalised from the Phase 1 EDA:
 | `is_grounded` | `alt_ft ≤ 0 AND gs_kt < 50` (EDA: ground alt alone is noisy) |
 | `phase` | **point-wise** rule on `vertical_rate_fpm` + `alt_ft`: ground / climb / descent / cruise / level / unknown. Trajectory phases (approach, go-around) are a Gold job |
 
-**Gold** — batch job `src/build_gold.py`, built once we have a real arrival wave to validate
-touchdown detection against (next Free Edition quota window):
+**Gold** — batch job `src/build_gold.py` (plain `CREATE OR REPLACE TABLE`, runs on the SQL
+warehouse / serverless notebook — *not* in the Lakeflow pipeline). Built and running against
+the first sample; touchdown/holding thresholds still need a full arrival wave to tune:
 
 | Table | Contents |
 |---|---|
@@ -436,8 +437,8 @@ Each phase is independently demoable.
 - ✅ Poller job (adsb.lol) → UC Volume; Auto Loader → Bronze.
 - ✅ **[Genie Code]** EDA pass on the first sample (`SkyWatch EDA: Bronze & Silver Profiling (KATL)`).
 - ✅ Silver with kinematics + airport geometry + point-wise phase (column set from the EDA).
-- ⏳ Collect a real arrival wave (~60–90 min) — blocked on Free Edition daily quota.
-- Gold batch job: `gold_tracks`, touchdown detection (tune vs the arrival wave), demand series, congestion rings, holding.
+- ✅ Gold batch job `src/build_gold.py` (SQL-warehouse CTAS, no pipeline run): `gold_tracks`, `gold_congestion`, `gold_holding`, `gold_touchdowns`, `gold_kpis`. First sample caught 6 landings + realistic ring congestion.
+- ⏳ Collect a real arrival wave (~60–90 min) → tune touchdown + holding thresholds; build `gold_demand_15m` + `gold_arrival_tracks` (M2 series / M1 training set).
 - Historical backfill job (~90 days, minute cadence, spatially pre-filtered).
 - **[Genie Code]** AI/BI dashboard v1 (no predictions yet — just the live picture); capture into repo.
 - Genie space v1 (Claude supplies config).

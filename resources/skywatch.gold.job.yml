@@ -1,0 +1,31 @@
+# SkyWatch — Gold batch build job.
+# Rebuilds the history-dependent Gold tables from silver_positions. Serverless.
+# Deployed PAUSED; run ad hoc during the build phase:
+#   databricks bundle run skywatch_gold -t dev
+# Later: unpause and let it run a few minutes behind the poller/pipeline cadence.
+
+resources:
+  jobs:
+    skywatch_gold:
+      name: skywatch-gold
+      max_concurrent_runs: 1
+      tags:
+        project: skywatch
+        component: gold
+
+      tasks:
+        - task_key: build_gold
+          notebook_task:
+            notebook_path: ../src/build_gold.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.stream_schema}
+              apt_elev_ft: ${var.apt_elev_ft}
+
+      schedule:
+        quartz_cron_expression: "0 3/10 * * * ?"   # every 10 min, offset 3 min past
+        timezone_id: UTC
+        pause_status: ${var.poller_pause_status}
+
+      queue:
+        enabled: true

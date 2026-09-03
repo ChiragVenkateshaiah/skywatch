@@ -51,8 +51,11 @@ variables:
   apt_lon:
     description: Airport reference longitude.
     default: "-84.4277"
+  apt_elev_ft:
+    description: Airport field elevation, ft (KATL = 1026). Used by Gold touchdown detection.
+    default: "1026"
   radius_nm:
-    description: Capture radius around the airport, nm (airplanes.live max 250).
+    description: Capture radius around the airport, nm (adsb.lol max 250).
     default: "250"
 
   # --- Live poller (src/poller.py + resources/skywatch.poller.job.yml) ---
