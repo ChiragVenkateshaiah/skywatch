@@ -51,6 +51,15 @@ variables:
     default: "250"
 
   # --- Live poller (src/poller.py + resources/skywatch.poller.job.yml) ---
+  api_base_url:
+    description: >-
+      ADS-B provider base URL, joined with /<lat>/<lon>/<radius>. Default adsb.lol
+      (open, no key). Any ADSB-Exchange-v2-compatible host works (adsbexchange,
+      api.adsb.one, airplanes.live once approved). adsb.fi is NOT drop-in.
+    default: "https://api.adsb.lol/v2/point"
+  source_name:
+    description: Provider tag — names the landing sub-directory and the raw `source` column.
+    default: adsblol
   poll_seconds:
     description: Total duration of one polling burst. 0 = single poll per run.
     default: "270"

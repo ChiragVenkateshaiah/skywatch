@@ -194,16 +194,19 @@ flowchart TD
 
 ### 5.1 Live ingestion
 
-| Source | Cost | Cadence | Notes |
-|---|---|---|---|
-| **airplanes.live** API | free, rate-limited | ~1–5 s poll | Community feed; good US/EU coverage; check ToS for project use |
-| **OpenSky Network** API | free (registered), quota'd | 5–10 s | Research-friendly terms; anonymous users heavily rate-limited |
-| **ADS-B Exchange** (RapidAPI) | paid tiers | 1 s | Higher limits, commercial-friendlier licensing |
+| Source | Cost | Notes |
+|---|---|---|
+| **adsb.lol** API — *chosen* | free, no key (ODbL, attribute "data from adsb.lol") | `GET /v2/point/<lat>/<lon>/<radius≤250nm>`; envelope `{ac:[…], now:<epoch_ms>, total}` — ADSB-Exchange-v2 schema, matches the `readsb-hist` backfill; verified working from Databricks serverless |
+| **adsb.fi** | free, no key | Same data, but different path (`/api/v2/lat/…/lon/…/dist/…`) and envelope (`aircraft`, `now` in seconds) — a documented fallback, not drop-in |
+| **airplanes.live** | free *after emailing them* a project description | Was the original pick; the open API now returns HTTP 403 until approved |
+| **OpenSky Network** | free (OAuth2 client creds) | Different "state vector" schema; needs a mapping layer |
+| **ADS-B Exchange** (RapidAPI) | paid | v2 schema, drop-in via `api_base_url`; for a commercial deployment |
 
-**Pattern:** a small poller (Databricks job with `Trigger.AvailableNow`, run every N minutes;
-or a lightweight external container) fetches the current-state JSON, filters to a bounding box
-around the target airport, and writes one file per poll to a **UC Volume**, partitioned
-`.../dt=YYYY-MM-DD/hh=HH/`. **Auto Loader** (`cloudFiles`) incrementally ingests into Bronze.
+**Pattern (built):** `src/poller.py` polls the current-state JSON for a 250 nm radius around the
+airport and writes one raw file per poll to a **UC Volume**, partitioned
+`.../<source_name>/dt=YYYY-MM-DD/hh=HH/<now_ms>.json`. The provider is the `api_base_url`
+bundle variable — swapping to any v2-compatible host is a one-line change + redeploy.
+**Auto Loader** (`cloudFiles`) incrementally ingests into Bronze.
 
 > On Free Edition the poller runs on a schedule (e.g. every 2–5 min), not continuously — see
 > the quota note in Section 10. That cadence is fine for demand forecasting and adequate for
@@ -508,7 +511,7 @@ architecture rather than replacing it.
 
 **Settled (2026-09-02):**
 - **Airport:** KATL (Atlanta) for v1 — strongest demand-banking signal, densest ADS-B coverage. EGLL added at Model 3 (holding stacks).
-- **Live source:** airplanes.live (no auth, schema matches the `readsb-hist` backfill, non-commercial use with attribution). OpenSky as fallback.
+- **Live source:** adsb.lol (no key, v2 schema matches the `readsb-hist` backfill, attribute "data from adsb.lol"; verified from Databricks serverless). airplanes.live turned out to require approval. adsb.fi / adsbexchange as fallbacks via `api_base_url`.
 - **Start:** Phase 1, live path first; historical backfill is the last task of Phase 1.
 - **Dashboards / EDA:** Genie Code (see §2.1). Pipeline/model/app code stays in the repo + DAB.
 

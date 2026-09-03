@@ -29,7 +29,8 @@ resources:
               radius_nm: ${var.radius_nm}
               poll_seconds: ${var.poll_seconds}
               poll_interval_seconds: ${var.poll_interval_seconds}
-              source_name: airplaneslive
+              api_base_url: ${var.api_base_url}
+              source_name: ${var.source_name}
 
       schedule:
         quartz_cron_expression: "0 0/5 * * * ?"   # every 5 minutes
