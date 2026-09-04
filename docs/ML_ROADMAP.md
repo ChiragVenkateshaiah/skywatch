@@ -369,6 +369,23 @@ mean/p90 for the 60 s backfill days vs the 15 s live day should converge to with
 gives the apples-to-apples offline number: promote if `MAE_new ≤ MAE_old + 0.05`; the
 correctness + skew arguments carry it even at flat MAE.
 
+**Run Gate 1 result (2026-09-04, on the expanded 9-day dataset):** ✅ PASS.
+- Cadence-distribution: `closure_kt` mean 188–231 (180 s days) / 192–255 (60 s) / **267** (15 s
+  live), p90 all ~390–460 — within ~15–30%, vs ~4× apart on `closure_nm`. Decisive.
+- Ring skew confirmed: backfill days have **zero** rows in the 100–200 / 200–250 rings; the
+  live day has more inbound there (383 + 282) than in the near rings. `airport_inbound_count`
+  is model-importance rank 7 — the fix mattered.
+- **v4** (18 features, honest val early-stopping): test MAE **1.232** on 2026-09-01,
+  RMSE 1.738, by band 1.05 / 1.19 / 1.41 / 1.48 nm, 79 % better than baseline. The *honest*
+  number on 9 days matches the old *optimistic* 1.240 on 3 days — the leak repaid by more data.
+- `turn_rate_dps` importance rank 11/17 (middle) → kept; candidate for a 60 s-lag serving
+  refinement, not a drop.
+- A/B cell skipped — `bundle run --var` does not propagate to a deployed job's params (use
+  `bundle deploy --var` then `bundle run`), and it would be confounded here (v1 of the table
+  was the 3-day / `closure_nm` build). Not blocking given the cadence check + flat MAE.
+- Known follow-up: day-boundary snapshots create ~7 junk days in `gold_demand_15m`
+  (1 – 2 arrivals, full 96-bin spine each) — filter in `build_gold.py` (PR 5 / M2 prep).
+
 ### Model 2
 
 **The archive only has the 1st of each month → no day-to-day continuity.** So Model 2 is a
