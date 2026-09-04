@@ -12,7 +12,13 @@
 # COMMAND ----------
 import math
 
+import pandas as pd
 from pyspark.sql import functions as F
+
+# The complete set of `phase` values produced by build_gold.py, in a fixed order — training
+# and scoring MUST use the same list or LightGBM rejects the predict frame (a scoring batch
+# rarely contains every phase).
+PHASE_CATEGORIES = ["ground", "climb", "descent", "cruise", "level", "unknown"]
 
 # Wide-body / heavy ICAO type codes seen at KATL (+ common freighters).
 _HEAVY = {
@@ -55,5 +61,7 @@ def eta_pandas(pdf):
     for c in num:
         if c in pdf.columns:
             pdf[c] = pdf[c].astype("float64")
-    pdf["phase"] = pdf["phase"].fillna("unknown").astype("category")
+    pdf["phase"] = pd.Categorical(
+        pdf["phase"].fillna("unknown"), categories=PHASE_CATEGORIES
+    )
     return pdf
