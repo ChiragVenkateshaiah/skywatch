@@ -105,6 +105,17 @@ variables:
     description: Hyperopt trials for Model 1 tuning.
     default: "24"
 
+  # --- Model 2: arrival demand forecast (src/forecast_demand.py) ---
+  demand_horizon_bins:
+    description: Forecast horizon in 15-min bins (12 = 3 h).
+    default: "12"
+  demand_cut_bins:
+    description: Backtest forecast-start bins per day (comma-separated).
+    default: "32,44,56,68,80"
+  demand_run_finetune:
+    description: Fine-tune Chronos-Bolt (needs GPU + >= ~14 backfill days to be worth it).
+    default: "false"
+
 targets:
   dev:
     mode: development

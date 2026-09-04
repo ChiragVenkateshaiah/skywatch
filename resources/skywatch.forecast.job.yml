@@ -1,0 +1,28 @@
+# SkyWatch — Model 2 training / backtest job (arrival demand forecast).
+# Serverless, on demand:  databricks bundle run skywatch_forecast_demand -t dev
+# Re-run after more backfill days land and Gold is rebuilt. Set run_finetune=true only on a
+# GPU-capable run with >= ~14 backfill days.
+
+resources:
+  jobs:
+    skywatch_forecast_demand:
+      name: skywatch-forecast-demand
+      max_concurrent_runs: 1
+      timeout_seconds: 7200
+      tags:
+        project: skywatch
+        component: ml
+
+      tasks:
+        - task_key: forecast
+          notebook_task:
+            notebook_path: ../src/forecast_demand.py
+            base_parameters:
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              model_name: ${var.catalog}.ml.demand_forecast
+              horizon_bins: ${var.demand_horizon_bins}
+              cut_bins: ${var.demand_cut_bins}
+              run_finetune: ${var.demand_run_finetune}
+
+      queue:
+        enabled: true
