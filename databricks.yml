@@ -104,6 +104,11 @@ variables:
   eta_max_evals:
     description: Hyperopt trials for Model 1 tuning.
     default: "24"
+  eta_ab_table_version:
+    description: >-
+      Delta version of gold_arrival_tracks to A/B against (the pre-closure-fix version).
+      Blank = skip the A/B cell. Get it from DESCRIBE HISTORY skywatch.stream.gold_arrival_tracks.
+    default: ""
 
   # --- Model 2: arrival demand forecast (src/forecast_demand.py) ---
   demand_horizon_bins:
