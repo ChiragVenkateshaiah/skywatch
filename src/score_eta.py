@@ -104,7 +104,11 @@ if len(score_pdf) == 0:
     print("no current inbound aircraft — nothing to score")
     dbutils.notebook.exit("empty")
 
-score_pdf["predicted_eta_min"] = model.predict(score_pdf[ETA_FEATURES]).clip(min=0)
+# the model's logged signature has phase as `string`; MLflow schema enforcement can't handle a
+# pandas category dtype. LightGBM re-maps the string via the categories stored at fit time.
+_X = score_pdf[ETA_FEATURES].copy()
+_X["phase"] = _X["phase"].astype(str)
+score_pdf["predicted_eta_min"] = pd.Series(model.predict(_X)).clip(lower=0).to_numpy()
 score_pdf["predicted_touchdown_ts"] = (
     score_pdf["snapshot_ts"] + pd.to_timedelta(score_pdf["predicted_eta_min"], unit="m")
 )
