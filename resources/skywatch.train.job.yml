@@ -22,6 +22,7 @@ resources:
               test_date: ${var.eta_test_date}
               max_evals: ${var.eta_max_evals}
               run_automl: "false"
+              ab_table_version: ${var.eta_ab_table_version}
 
       queue:
         enabled: true

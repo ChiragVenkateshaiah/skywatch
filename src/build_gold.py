@@ -9,7 +9,7 @@
 # MAGIC
 # MAGIC | Table | Grain | Notes |
 # MAGIC |---|---|---|
-# MAGIC | `gold_tracks` | one row per report | + Δt, Δalt-derived vertical rate, along-track closure, turn rate, `seg_id` (gap > 3 min splits), `inbound_flag` |
+# MAGIC | `gold_tracks` | one row per report | + Δt, Δalt-derived vertical rate, along-track closure rate, turn rate, `seg_id` (gap > 3 min splits), `inbound_flag` |
 # MAGIC | `gold_congestion` | minute × ring | inbound / total counts, mean alt / gs / ETA per ring |
 # MAGIC | `gold_holding` | one row per circling aircraft | circular-variance heading spread in a small box — currently flags *any* circling (light a/c, military); airline-hold tuning is a TODO |
 # MAGIC | `gold_touchdowns` | one row per landing | **first-cut thresholds** — tune against a full arrival wave |
@@ -55,43 +55,73 @@ WITH ordered AS (
   WINDOW w AS (PARTITION BY icao ORDER BY snapshot_ts)
 ),
 stepped AS (SELECT *, timestampdiff(SECOND, prev_ts, snapshot_ts) AS dt_s FROM ordered),
-derived AS (
-  SELECT *,
-    CASE WHEN dt_s BETWEEN 1 AND 600 THEN (alt_ft - prev_alt_ft) / dt_s * 60.0 END AS derived_vrate_fpm,
-    (prev_dist_nm - dist_to_apt_nm) AS closure_nm,
-    CASE WHEN prev_track_deg IS NOT NULL
-         THEN least(abs(track_deg - prev_track_deg), 360 - abs(track_deg - prev_track_deg)) END AS turn_deg,
-    CASE WHEN dt_s IS NULL OR dt_s > 180 THEN 1 ELSE 0 END AS seg_break
+flagged AS (
+  -- a new track starts when there is no usable previous report (first report, or a gap
+  -- outside 1..180 s — e.g. the same airframe seen on two disjoint backfill days)
+  SELECT *, CASE WHEN dt_s IS NULL OR dt_s < 1 OR dt_s > 180 THEN 1 ELSE 0 END AS seg_break
   FROM stepped
 ),
 segmented AS (
   SELECT *,
     concat(icao, '-', cast(sum(seg_break) OVER (PARTITION BY icao ORDER BY snapshot_ts) AS string)) AS seg_id
-  FROM derived
+  FROM flagged
+),
+derived AS (
+  SELECT *,
+    -- vertical rate keeps the wider 1..600 s guard (conservative — the touchdown label set
+    -- depends on descent_reports; keep it stable across this PR)
+    CASE WHEN dt_s BETWEEN 1 AND 600 THEN (alt_ft - prev_alt_ft) / dt_s * 60.0 END AS derived_vrate_fpm,
+    -- closure / turn / "closing" are gated on seg_break = 0 (dt_s in 1..180, same track) so a
+    -- cross-day lag can never produce a value.
+    -- closure_kt = a RATE (nm closed per hour = kt), so 60 s backfill and 15 s live cadence
+    -- give the same number for the same approach. Clamp implausible values from bad fixes.
+    CASE WHEN seg_break = 0
+           AND abs((prev_dist_nm - dist_to_apt_nm) / dt_s * 3600) <= 700
+         THEN (prev_dist_nm - dist_to_apt_nm) / dt_s * 3600 END AS closure_kt,
+    CASE WHEN seg_break = 0 AND prev_track_deg IS NOT NULL
+         THEN least(abs(track_deg - prev_track_deg), 360 - abs(track_deg - prev_track_deg)) END AS turn_deg,
+    CASE WHEN seg_break = 0 AND prev_dist_nm > dist_to_apt_nm THEN 1 ELSE 0 END AS closing_step
+  FROM segmented
 )
 SELECT
   seg_id, icao, callsign, ac_type, apt_icao, snapshot_ts,
   lat, lon, alt_ft, alt_geom_ft, gs_kt, track_deg, sel_altitude_ft,
   dist_to_apt_nm, bearing_to_apt, heading_err_deg, is_grounded, phase,
-  dt_s, closure_nm, turn_deg,
+  CASE WHEN seg_break = 0 THEN dt_s END AS dt_s,   -- null at a segment boundary (no cross-day step)
+  closure_kt, turn_deg,
   coalesce(vertical_rate_fpm, derived_vrate_fpm) AS vrate_fpm,
   coalesce(vertical_rate_src, CASE WHEN derived_vrate_fpm IS NOT NULL THEN 'delta' END) AS vrate_src,
-  CASE WHEN turn_deg IS NOT NULL AND dt_s BETWEEN 1 AND 600 THEN turn_deg / dt_s END AS turn_rate_dps,
+  CASE WHEN turn_deg IS NOT NULL THEN turn_deg / dt_s END AS turn_rate_dps,
   count(*)         OVER (PARTITION BY seg_id) AS seg_n_reports,
   min(snapshot_ts) OVER (PARTITION BY seg_id) AS seg_start_ts,
   max(snapshot_ts) OVER (PARTITION BY seg_id) AS seg_end_ts,
   (heading_err_deg < 70
    AND alt_ft BETWEEN 500 AND 40000
    AND NOT is_grounded
-   AND sum(CASE WHEN (prev_dist_nm - dist_to_apt_nm) > 0 THEN 1 ELSE 0 END)
+   AND sum(closing_step)
          OVER (PARTITION BY seg_id ORDER BY snapshot_ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) >= 2
   ) AS inbound_flag
-FROM segmented
+FROM derived
 """)
 print(spark.table(f"{S}.gold_tracks").count(), "rows")
 
 # COMMAND ----------
-# MAGIC %md ## `gold_congestion` — minute × distance ring
+# MAGIC %md
+# MAGIC ## `gold_congestion` — minute × distance ring
+# MAGIC
+# MAGIC **Coverage boundary: 100 nm.** The historical backfill (`backfill_local.py`) only ever
+# MAGIC captured aircraft within 100 nm — pulling further out means re-downloading every source
+# MAGIC file (the radius filter is applied *after* download, so it doesn't reduce transfer), which
+# MAGIC isn't worth it: nothing in the project actually uses distance beyond ~120 nm (Model 1's
+# MAGIC evaluated bands top out at 100 nm, `score_eta.py`'s `max_dist_nm` default is 120). The live
+# MAGIC poller captures out to 250 nm, so the `100-200` / `200-250` rings below are **populated only
+# MAGIC for live snapshots** — on every backfill day those two ring rows are simply absent (not
+# MAGIC zero — `GROUP BY` never emits a ring with no matching aircraft). Do not build a model
+# MAGIC feature or a cross-day aggregate on those two rings; `airport_inbound_count` in
+# MAGIC `gold_arrival_tracks` / `score_eta.py` already restricts to `00-40`/`40-100` for exactly
+# MAGIC this reason. The two outer buckets are informational (live "how far out can we see")
+# MAGIC only. *(Simplification tracked for the PR 5 gold rebuild: merge them into one `100+`
+# MAGIC bucket, or drop them, so the schema stops implying coverage it doesn't have.)*
 
 # COMMAND ----------
 spark.sql(f"""
@@ -101,8 +131,8 @@ SELECT
   apt_icao,
   CASE WHEN dist_to_apt_nm < 40  THEN '00-40'
        WHEN dist_to_apt_nm < 100 THEN '40-100'
-       WHEN dist_to_apt_nm < 200 THEN '100-200'
-       ELSE '200-250' END AS ring,
+       WHEN dist_to_apt_nm < 200 THEN '100-200'   -- live-only, see note above
+       ELSE '200-250' END AS ring,                -- live-only, see note above
   count(DISTINCT icao)                                     AS n_aircraft,
   count(DISTINCT CASE WHEN inbound_flag THEN icao END)     AS n_inbound,
   round(avg(alt_ft))                                       AS mean_alt_ft,
@@ -194,10 +224,15 @@ print(spark.table(f"{S}.gold_touchdowns").count(), "rows")
 spark.sql(f"""
 CREATE OR REPLACE TABLE {S}.gold_arrival_tracks AS
 WITH inbound_ct AS (
-  SELECT minute_ts, apt_icao, sum(n_inbound) AS n_inbound_all_rings
-  FROM {S}.gold_congestion GROUP BY 1, 2
+  -- only the rings BOTH data sources cover: backfill keeps aircraft within 100 nm,
+  -- the live poller within 250 nm. Counting all rings makes the feature systematically
+  -- larger at serving time than the model ever saw. Keep this identical to score_eta.py.
+  SELECT minute_ts, apt_icao, sum(n_inbound) AS n_inbound_common_rings
+  FROM {S}.gold_congestion
+  WHERE ring IN ('00-40', '40-100')
+  GROUP BY 1, 2
 )
-SELECT
+SELECT /*+ BROADCAST(c) */
   t.seg_id, t.icao, t.callsign, t.ac_type, t.apt_icao,
   t.snapshot_ts,
   td.touchdown_ts,
@@ -206,10 +241,10 @@ SELECT
   -- features
   t.dist_to_apt_nm, t.bearing_to_apt, t.heading_err_deg,
   t.alt_ft, t.alt_geom_ft, t.sel_altitude_ft,
-  t.gs_kt, t.track_deg, t.vrate_fpm, t.turn_rate_dps, t.closure_nm, t.phase,
+  t.gs_kt, t.track_deg, t.vrate_fpm, t.turn_rate_dps, t.closure_kt, t.phase,
   hour(t.snapshot_ts)                                 AS hour_utc,
   dayofweek(t.snapshot_ts)                            AS dow,
-  coalesce(c.n_inbound_all_rings, 0)                  AS airport_inbound_count
+  coalesce(c.n_inbound_common_rings, 0)               AS airport_inbound_count
 FROM {S}.gold_tracks t
 JOIN {S}.gold_touchdowns td ON td.seg_id = t.seg_id
 LEFT JOIN inbound_ct c

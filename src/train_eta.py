@@ -27,14 +27,16 @@ try:
     dbutils.widgets.text("test_date", "2026-09-01")
     dbutils.widgets.text("max_evals", "24")
     dbutils.widgets.text("run_automl", "false")
+    dbutils.widgets.text("ab_table_version", "")
     STREAM = dbutils.widgets.get("stream_schema")
     MODEL_NAME = dbutils.widgets.get("model_name")
     TEST_DATE = dbutils.widgets.get("test_date")
     MAX_EVALS = int(dbutils.widgets.get("max_evals"))
     RUN_AUTOML = dbutils.widgets.get("run_automl").lower() == "true"
+    AB_TABLE_VERSION = dbutils.widgets.get("ab_table_version").strip()
 except Exception:
-    STREAM, MODEL_NAME, TEST_DATE, MAX_EVALS, RUN_AUTOML = (
-        "skywatch.stream", "skywatch.ml.eta_touchdown", "2026-09-01", 24, False,
+    STREAM, MODEL_NAME, TEST_DATE, MAX_EVALS, RUN_AUTOML, AB_TABLE_VERSION = (
+        "skywatch.stream", "skywatch.ml.eta_touchdown", "2026-09-01", 24, False, "",
     )
 print(f"train set: {STREAM}.gold_arrival_tracks | test day: {TEST_DATE} | model: {MODEL_NAME}")
 
@@ -175,7 +177,11 @@ with mlflow.start_run(run_name="eta_hyperopt") as parent_run:
     print(f"best val MAE = {best_val_mae:.3f} min   params={best}")
 
 # COMMAND ----------
-# MAGIC %md ## 5. Refit on train+val, evaluate on the test day, register
+# MAGIC %md ## 5. Refit, evaluate on the held-out test day, register
+# MAGIC
+# MAGIC The test day is touched exactly once, for the headline number. Tree count is learned
+# MAGIC by early-stopping on the **validation** day, then the model is refit on train+val at
+# MAGIC `best_iteration * 1.15` (≈ 15% more trees for the ≈ 50% more data) with no callback.
 
 # COMMAND ----------
 from mlflow.models import infer_signature
@@ -187,18 +193,24 @@ best_params = {
     "bagging_fraction": float(best["bagging_fraction"]),
     "min_child_samples": int(best["min_child_samples"]),
     "lambda_l2": float(best["lambda_l2"]),
-    "objective": "mae", "n_estimators": 2000, "n_jobs": -1, "verbose": -1,
+    "objective": "mae", "n_jobs": -1, "verbose": -1,
 }
 
 X_trval = pd.concat([X_tr, X_va])
 y_trval = pd.concat([y_tr, y_va])
 
 with mlflow.start_run(run_name="eta_final") as final_run:
-    # early-stopping iteration count learned during tuning, applied here via a val tail
-    fit_model = lgb.LGBMRegressor(**best_params)
-    fit_model.fit(X_trval, y_trval, eval_set=[(X_te, y_te)], eval_metric="mae",
-                  categorical_feature=CAT_IDX,
-                  callbacks=[lgb.early_stopping(50, verbose=False)])
+    # stage 1 — learn the tree count on a real held-out validation day
+    probe = lgb.LGBMRegressor(**best_params, n_estimators=2000)
+    probe.fit(X_tr, y_tr, eval_set=[(X_va, y_va)], eval_metric="mae",
+              categorical_feature=CAT_IDX,
+              callbacks=[lgb.early_stopping(50, verbose=False)])
+    n_final = max(50, round((probe.best_iteration_ or 2000) * 1.15))
+
+    # stage 2 — refit on train + val at a fixed tree count, no peeking at the test day
+    fit_model = lgb.LGBMRegressor(**best_params, n_estimators=n_final)
+    fit_model.fit(X_trval, y_trval, categorical_feature=CAT_IDX)
+    mlflow.log_metric("n_estimators_final", n_final)
 
     pred_te = fit_model.predict(X_te)
     model_tbl = by_band(test, pred_te, y_te.values)
@@ -260,6 +272,57 @@ if model_mae < baseline_mae:
 else:
     print(f"registered {MODEL_NAME} v{mv.version} as @challenger only "
           f"(did NOT beat baseline {baseline_mae:.2f})")
+
+# COMMAND ----------
+# MAGIC %md ## 8. A/B — closure fix vs the pre-fix training set (Delta time travel)
+# MAGIC Refits with the **same params and the same honest scheme** on
+# MAGIC `gold_arrival_tracks VERSION AS OF <ab_table_version>` (the version before the
+# MAGIC `fix/gold-closure-rate` PR), using the old `closure_nm` feature. Both offline sets are
+# MAGIC 60 s cadence, so **A ≈ B is expected and is a pass** — the serving benefit only shows at
+# MAGIC 15 s. Judge the fix on the cadence-distribution query in the PR, not on this number.
+
+# COMMAND ----------
+if AB_TABLE_VERSION:
+    AB_FEATURES = ["closure_nm" if f == "closure_kt" else f
+                   for f in FEATURES if f != "closure_geom_kt"]
+    ab_cat_idx = [AB_FEATURES.index(c) for c in FEATURES_CAT]
+
+    o = add_eta_features(
+        spark.sql(f"SELECT * FROM {STREAM}.gold_arrival_tracks VERSION AS OF {AB_TABLE_VERSION}")
+        .where(F.col(TARGET).between(0.5, 40))
+        .where(F.col("dist_to_apt_nm").isNotNull() & F.col("gs_kt").isNotNull()
+               & F.col("alt_ft").isNotNull())
+        .withColumn("obs_date", F.to_date("snapshot_ts"))
+    ).select("seg_id", "obs_date", TARGET, *AB_FEATURES).toPandas()
+    for c in AB_FEATURES:
+        if c not in FEATURES_CAT:
+            o[c] = o[c].astype("float64")
+    o[TARGET] = o[TARGET].astype("float64")
+    o["phase"] = pd.Categorical(o["phase"].fillna("unknown"), categories=PHASE_CATEGORIES)
+
+    o_test = o[o.obs_date == test_date]
+    o_pool = o[o.obs_date != test_date]
+    o_val_day = sorted(o_pool.obs_date.unique())[-1]
+    o_tr, o_va = o_pool[o_pool.obs_date != o_val_day], o_pool[o_pool.obs_date == o_val_day]
+
+    with mlflow.start_run(run_name="eta_ab_prefix"):
+        p = lgb.LGBMRegressor(**best_params, n_estimators=2000)
+        p.fit(o_tr[AB_FEATURES], o_tr[TARGET],
+              eval_set=[(o_va[AB_FEATURES], o_va[TARGET])], eval_metric="mae",
+              categorical_feature=ab_cat_idx, callbacks=[lgb.early_stopping(50, verbose=False)])
+        n_ab = max(50, round((p.best_iteration_ or 2000) * 1.15))
+        m = lgb.LGBMRegressor(**best_params, n_estimators=n_ab)
+        m.fit(pd.concat([o_tr, o_va])[AB_FEATURES], pd.concat([o_tr, o_va])[TARGET],
+              categorical_feature=ab_cat_idx)
+        ab_old_mae = mean_absolute_error(o_test[TARGET], m.predict(o_test[AB_FEATURES]))
+        mlflow.log_metrics({"ab_old_test_mae_min": ab_old_mae,
+                            "ab_new_test_mae_min": model_mae,
+                            "ab_delta_min": model_mae - ab_old_mae})
+    verdict = "promote" if model_mae <= ab_old_mae + 0.05 else "review the gap (see PR criteria)"
+    print(f"\nA/B on {TEST_DATE}:  pre-fix {ab_old_mae:.3f}  ->  post-fix {model_mae:.3f} min "
+          f"({model_mae - ab_old_mae:+.3f})  =>  {verdict}")
+else:
+    print("ab_table_version not set — skipping the A/B comparison")
 
 # COMMAND ----------
 if RUN_AUTOML:

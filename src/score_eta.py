@@ -78,10 +78,14 @@ scoring_sdf = add_eta_features(spark.sql(f"""
                          - INTERVAL {FRESHNESS_MIN} MINUTES
   ),
   inbound_ct AS (
-    SELECT minute_ts, apt_icao, sum(n_inbound) AS n_inbound_all_rings
-    FROM {STREAM}.gold_congestion GROUP BY 1, 2
+    -- keep identical to gold_arrival_tracks in build_gold.py: only the rings the backfill
+    -- (100 nm) and the live poller (250 nm) both cover
+    SELECT minute_ts, apt_icao, sum(n_inbound) AS n_inbound_common_rings
+    FROM {STREAM}.gold_congestion
+    WHERE ring IN ('00-40', '40-100')
+    GROUP BY 1, 2
   )
-  SELECT l.*, coalesce(c.n_inbound_all_rings, 0) AS airport_inbound_count
+  SELECT /*+ BROADCAST(c) */ l.*, coalesce(c.n_inbound_common_rings, 0) AS airport_inbound_count
   FROM latest l
   LEFT JOIN inbound_ct c
     ON c.minute_ts = date_trunc('MINUTE', l.snapshot_ts) AND c.apt_icao = l.apt_icao
