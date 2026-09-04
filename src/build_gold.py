@@ -55,38 +55,49 @@ WITH ordered AS (
   WINDOW w AS (PARTITION BY icao ORDER BY snapshot_ts)
 ),
 stepped AS (SELECT *, timestampdiff(SECOND, prev_ts, snapshot_ts) AS dt_s FROM ordered),
-derived AS (
-  SELECT *,
-    CASE WHEN dt_s BETWEEN 1 AND 600 THEN (alt_ft - prev_alt_ft) / dt_s * 60.0 END AS derived_vrate_fpm,
-    (prev_dist_nm - dist_to_apt_nm) AS closure_nm,
-    CASE WHEN prev_track_deg IS NOT NULL
-         THEN least(abs(track_deg - prev_track_deg), 360 - abs(track_deg - prev_track_deg)) END AS turn_deg,
-    CASE WHEN dt_s IS NULL OR dt_s > 180 THEN 1 ELSE 0 END AS seg_break
+flagged AS (
+  -- a new track starts when there is no usable previous report (first report, or a gap
+  -- outside 1..180 s — e.g. the same airframe seen on two disjoint backfill days)
+  SELECT *, CASE WHEN dt_s IS NULL OR dt_s < 1 OR dt_s > 180 THEN 1 ELSE 0 END AS seg_break
   FROM stepped
 ),
 segmented AS (
   SELECT *,
     concat(icao, '-', cast(sum(seg_break) OVER (PARTITION BY icao ORDER BY snapshot_ts) AS string)) AS seg_id
-  FROM derived
+  FROM flagged
+),
+derived AS (
+  SELECT *,
+    -- vertical rate keeps the wider 1..600 s guard (conservative — the touchdown label set
+    -- depends on descent_reports; keep it stable across this PR)
+    CASE WHEN dt_s BETWEEN 1 AND 600 THEN (alt_ft - prev_alt_ft) / dt_s * 60.0 END AS derived_vrate_fpm,
+    -- closure / turn / "closing" are gated on seg_break = 0 (dt_s in 1..180, same track) so a
+    -- cross-day lag can never produce a value
+    CASE WHEN seg_break = 0 THEN (prev_dist_nm - dist_to_apt_nm) END AS closure_nm,
+    CASE WHEN seg_break = 0 AND prev_track_deg IS NOT NULL
+         THEN least(abs(track_deg - prev_track_deg), 360 - abs(track_deg - prev_track_deg)) END AS turn_deg,
+    CASE WHEN seg_break = 0 AND prev_dist_nm > dist_to_apt_nm THEN 1 ELSE 0 END AS closing_step
+  FROM segmented
 )
 SELECT
   seg_id, icao, callsign, ac_type, apt_icao, snapshot_ts,
   lat, lon, alt_ft, alt_geom_ft, gs_kt, track_deg, sel_altitude_ft,
   dist_to_apt_nm, bearing_to_apt, heading_err_deg, is_grounded, phase,
-  dt_s, closure_nm, turn_deg,
+  CASE WHEN seg_break = 0 THEN dt_s END AS dt_s,   -- null at a segment boundary (no cross-day step)
+  closure_nm, turn_deg,
   coalesce(vertical_rate_fpm, derived_vrate_fpm) AS vrate_fpm,
   coalesce(vertical_rate_src, CASE WHEN derived_vrate_fpm IS NOT NULL THEN 'delta' END) AS vrate_src,
-  CASE WHEN turn_deg IS NOT NULL AND dt_s BETWEEN 1 AND 600 THEN turn_deg / dt_s END AS turn_rate_dps,
+  CASE WHEN turn_deg IS NOT NULL THEN turn_deg / dt_s END AS turn_rate_dps,
   count(*)         OVER (PARTITION BY seg_id) AS seg_n_reports,
   min(snapshot_ts) OVER (PARTITION BY seg_id) AS seg_start_ts,
   max(snapshot_ts) OVER (PARTITION BY seg_id) AS seg_end_ts,
   (heading_err_deg < 70
    AND alt_ft BETWEEN 500 AND 40000
    AND NOT is_grounded
-   AND sum(CASE WHEN (prev_dist_nm - dist_to_apt_nm) > 0 THEN 1 ELSE 0 END)
+   AND sum(closing_step)
          OVER (PARTITION BY seg_id ORDER BY snapshot_ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) >= 2
   ) AS inbound_flag
-FROM segmented
+FROM derived
 """)
 print(spark.table(f"{S}.gold_tracks").count(), "rows")
 
