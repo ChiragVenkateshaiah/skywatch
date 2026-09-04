@@ -1,0 +1,34 @@
+# SkyWatch — Model 1 batch scoring job.
+# Loads eta_touchdown@champion, scores current inbound aircraft, appends to
+# skywatch.stream.predictions. Serverless. On demand for now:
+#   databricks bundle run skywatch_score_eta -t dev
+# Later: unpause and run a few minutes behind the poller / pipeline / gold cadence.
+
+resources:
+  jobs:
+    skywatch_score_eta:
+      name: skywatch-score-eta
+      max_concurrent_runs: 1
+      timeout_seconds: 3600
+      tags:
+        project: skywatch
+        component: ml
+
+      tasks:
+        - task_key: score
+          notebook_task:
+            notebook_path: ../src/score_eta.py
+            base_parameters:
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              model_name: ${var.catalog}.ml.eta_touchdown
+              model_alias: champion
+              max_dist_nm: "120"
+              freshness_min: "20"
+
+      schedule:
+        quartz_cron_expression: "0 6/10 * * * ?"   # every 10 min, offset 6 min past
+        timezone_id: UTC
+        pause_status: ${var.poller_pause_status}
+
+      queue:
+        enabled: true

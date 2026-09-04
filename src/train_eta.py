@@ -39,52 +39,32 @@ except Exception:
 print(f"train set: {STREAM}.gold_arrival_tracks | test day: {TEST_DATE} | model: {MODEL_NAME}")
 
 # COMMAND ----------
+# MAGIC %run ./eta_features
+
+# COMMAND ----------
 # MAGIC %md ## 1. Load + feature engineering
+# MAGIC Features come from `eta_features.py` (shared with `score_eta.py`).
 
 # COMMAND ----------
 import numpy as np
 import pandas as pd
 from pyspark.sql import functions as F
 
-# wide-body / heavy ICAO type codes seen at KATL (+ common freighters)
-HEAVY = {
-    "B762", "B763", "B764", "B772", "B773", "B77L", "B77W", "B778", "B779",
-    "B788", "B789", "B78X", "B742", "B744", "B748", "A332", "A333", "A338",
-    "A339", "A342", "A343", "A345", "A346", "A359", "A35K", "A388", "MD11",
-    "IL76", "A124", "C17", "C5M",
-}
+FEATURES = ETA_FEATURES
+FEATURES_CAT = ETA_CAT
+TARGET = ETA_TARGET
 
-FEATURES_NUM = [
-    "dist_to_apt_nm", "heading_err_deg", "bearing_sin", "bearing_cos", "alt_ft", "gs_kt",
-    "vrate_fpm", "closure_nm", "turn_rate_dps", "sel_altitude_ft",
-    "airport_inbound_count", "hour_sin", "hour_cos", "dow_sin", "dow_cos", "is_heavy",
-]
-FEATURES_CAT = ["phase"]
-FEATURES = FEATURES_NUM + FEATURES_CAT
-TARGET = "minutes_to_touchdown"
-
-sdf = (
+sdf = add_eta_features(
     spark.table(f"{STREAM}.gold_arrival_tracks")
-    .where(F.col("minutes_to_touchdown").between(0.5, 40))
-    .where(F.col("dist_to_apt_nm").isNotNull() & F.col("gs_kt").isNotNull() & F.col("alt_ft").isNotNull())
+    .where(F.col(TARGET).between(0.5, 40))
+    .where(F.col("dist_to_apt_nm").isNotNull() & F.col("gs_kt").isNotNull()
+           & F.col("alt_ft").isNotNull())
     .withColumn("obs_date", F.to_date("snapshot_ts"))
-    .withColumn("is_heavy", F.col("ac_type").isin(list(HEAVY)).cast("int"))
-    .withColumn("hour_sin", F.sin(F.col("hour_utc") / 24 * 2 * np.pi))
-    .withColumn("hour_cos", F.cos(F.col("hour_utc") / 24 * 2 * np.pi))
-    .withColumn("dow_sin", F.sin((F.col("dow") - 1) / 7 * 2 * np.pi))
-    .withColumn("dow_cos", F.cos((F.col("dow") - 1) / 7 * 2 * np.pi))
-    .withColumn("bearing_sin", F.sin(F.radians("bearing_to_apt")))
-    .withColumn("bearing_cos", F.cos(F.radians("bearing_to_apt")))
-    .withColumn("baseline_pred", F.col("dist_to_apt_nm") / F.col("gs_kt") * 60)
-)
+).withColumn("baseline_pred", F.col("dist_to_apt_nm") / F.col("gs_kt") * 60)
 
-pdf = sdf.select(
-    "seg_id", "obs_date", "ac_type", TARGET, "baseline_pred", *FEATURES
-).toPandas()
-# Spark round() yields DECIMAL -> decimal.Decimal in pandas; force float everywhere numeric
-_num = [c for c in pdf.columns if c not in ("seg_id", "obs_date", "ac_type", "phase")]
-pdf[_num] = pdf[_num].astype("float64")
-pdf["phase"] = pdf["phase"].fillna("unknown").astype("category")
+pdf = eta_pandas(
+    sdf.select("seg_id", "obs_date", "ac_type", TARGET, "baseline_pred", *FEATURES).toPandas()
+)
 
 print(f"{len(pdf):,} rows | {pdf.seg_id.nunique():,} arrivals | dates {sorted(pdf.obs_date.unique())}")
 
