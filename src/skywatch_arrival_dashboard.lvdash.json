@@ -163,6 +163,79 @@
         "  eta_bin_minutes"
       ],
       "schema": "stream"
+    },
+    {
+      "columns": [
+        {
+          "displayName": "dist_nm",
+          "expression": "ROUND(`dist_to_apt_nm`, 0)"
+        },
+        {
+          "displayName": "eta_min",
+          "expression": "ROUND(`predicted_eta_min`, 1)"
+        }
+      ],
+      "displayName": "Latest Predictions",
+      "name": "predictions_latest",
+      "queryLines": [
+        "SELECT\n",
+        "  scored_at,\n",
+        "  model_version,\n",
+        "  icao,\n",
+        "  callsign,\n",
+        "  ac_type,\n",
+        "  apt_icao,\n",
+        "  snapshot_ts,\n",
+        "  dist_to_apt_nm,\n",
+        "  gs_kt,\n",
+        "  alt_ft,\n",
+        "  heading_err_deg,\n",
+        "  predicted_eta_min,\n",
+        "  predicted_touchdown_ts\n",
+        "FROM\n",
+        "  skywatch.stream.predictions\n",
+        "WHERE\n",
+        "  scored_at\n",
+        "    = (\n",
+        "      SELECT\n",
+        "        MAX(scored_at)\n",
+        "      FROM\n",
+        "        skywatch.stream.predictions\n",
+        "    )\n",
+        "ORDER BY\n",
+        "  predicted_touchdown_ts"
+      ]
+    },
+    {
+      "columns": [
+        {
+          "displayName": "mae",
+          "expression": "AVG(ABS(`error_min`))"
+        },
+        {
+          "displayName": "error_bin",
+          "expression": "FLOOR(`error_min`)"
+        }
+      ],
+      "displayName": "Predictions with Actuals",
+      "name": "predictions_scored",
+      "queryLines": [
+        "SELECT\n",
+        "  icao,\n",
+        "  callsign,\n",
+        "  ac_type,\n",
+        "  snapshot_ts,\n",
+        "  dist_to_apt_nm,\n",
+        "  predicted_eta_min,\n",
+        "  predicted_touchdown_ts,\n",
+        "  actual_touchdown_ts,\n",
+        "  actual_eta_min,\n",
+        "  error_min\n",
+        "FROM\n",
+        "  skywatch.stream.predictions_scored\n",
+        "ORDER BY\n",
+        "  snapshot_ts DESC"
+      ]
     }
   ],
   "pages": [
@@ -404,12 +477,12 @@
             "height": 2,
             "width": 12,
             "x": 0,
-            "y": 40
+            "y": 64
           },
           "widget": {
             "multilineTextboxSpec": {
               "lines": [
-                "Data: adsb.lol (ODbL) · KATL (Hartsfield–Jackson) · live poll, 250 nm radius · this is the current-traffic picture — no predictions yet."
+                "Data: adsb.lol (ODbL) · KATL (Hartsfield–Jackson) · live poll, 250 nm radius · predictions: Model 1 (time-to-touchdown)"
               ]
             },
             "name": "footer_text"
@@ -852,6 +925,387 @@
               },
               "version": 2,
               "widgetType": "table"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 2,
+            "width": 12,
+            "x": 0,
+            "y": 42
+          },
+          "widget": {
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Arrival Manager — Model 1 (time-to-touchdown)"
+              ]
+            },
+            "name": "header_predictions"
+          }
+        },
+        {
+          "position": {
+            "height": 4,
+            "width": 3,
+            "x": 0,
+            "y": 44
+          },
+          "widget": {
+            "name": "counter_inbound_scored",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "predictions_latest",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "COUNT(`icao`)",
+                      "name": "count(icao)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "data": {
+                "queryName": "main_query"
+              },
+              "encodings": {
+                "value": {
+                  "fieldName": "count(icao)",
+                  "rowNumber": 0
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Inbound scored"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 4,
+            "width": 3,
+            "x": 3,
+            "y": 44
+          },
+          "widget": {
+            "name": "counter_model_version",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "predictions_latest",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "MAX(`model_version`)",
+                      "name": "max(model_version)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "data": {
+                "queryName": "main_query"
+              },
+              "encodings": {
+                "value": {
+                  "fieldName": "max(model_version)",
+                  "rowNumber": 0
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Model version"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 4,
+            "width": 3,
+            "x": 6,
+            "y": 44
+          },
+          "widget": {
+            "name": "counter_mae",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "predictions_scored",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "MEASURE(`mae`)",
+                      "name": "measure(mae)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "data": {
+                "queryName": "main_query"
+              },
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(mae)",
+                  "rowNumber": 0
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Accuracy (MAE)"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 4,
+            "width": 3,
+            "x": 9,
+            "y": 44
+          },
+          "widget": {
+            "name": "counter_predictions_checked",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "predictions_scored",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "COUNT(`icao`)",
+                      "name": "count(icao)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "data": {
+                "queryName": "main_query"
+              },
+              "encodings": {
+                "value": {
+                  "fieldName": "count(icao)",
+                  "rowNumber": 0
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Predictions checked"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 8,
+            "width": 12,
+            "x": 0,
+            "y": 48
+          },
+          "widget": {
+            "name": "table_arrival_sequence",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "predictions_latest",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "expression": "`callsign`",
+                      "name": "callsign"
+                    },
+                    {
+                      "expression": "`ac_type`",
+                      "name": "ac_type"
+                    },
+                    {
+                      "expression": "`dist_nm`",
+                      "name": "dist_nm"
+                    },
+                    {
+                      "expression": "`eta_min`",
+                      "name": "eta_min"
+                    },
+                    {
+                      "expression": "`predicted_touchdown_ts`",
+                      "name": "predicted_touchdown_ts"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "data": {
+                "queryName": "main_query"
+              },
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "callsign"
+                  },
+                  {
+                    "fieldName": "ac_type"
+                  },
+                  {
+                    "fieldName": "dist_nm"
+                  },
+                  {
+                    "fieldName": "eta_min"
+                  },
+                  {
+                    "fieldName": "predicted_touchdown_ts"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Predicted arrival sequence"
+              },
+              "version": 2,
+              "widgetType": "table"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 8,
+            "width": 6,
+            "x": 0,
+            "y": 56
+          },
+          "widget": {
+            "name": "histogram_error",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "predictions_scored",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`error_bin`",
+                      "name": "error_bin"
+                    },
+                    {
+                      "expression": "COUNT(`icao`)",
+                      "name": "count(icao)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "data": {
+                "queryName": "main_query"
+              },
+              "encodings": {
+                "color": {
+                  "displayName": "error_bin",
+                  "fieldName": "error_bin",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "x": {
+                  "displayName": "error_bin",
+                  "fieldName": "error_bin",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "displayName": "icao",
+                  "fieldName": "count(icao)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Prediction error (predicted minus actual, minutes)"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 8,
+            "width": 6,
+            "x": 6,
+            "y": 56
+          },
+          "widget": {
+            "name": "scatter_eta",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "predictions_scored",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "expression": "`actual_eta_min`",
+                      "name": "actual_eta_min"
+                    },
+                    {
+                      "expression": "`predicted_eta_min`",
+                      "name": "predicted_eta_min"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "data": {
+                "queryName": "main_query"
+              },
+              "encodings": {
+                "x": {
+                  "displayName": "Actual ETA (min)",
+                  "fieldName": "actual_eta_min",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "displayName": "Predicted ETA (min)",
+                  "fieldName": "predicted_eta_min",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Predicted vs Actual ETA"
+              },
+              "version": 3,
+              "widgetType": "scatter"
             }
           }
         }

@@ -471,8 +471,10 @@ Each phase is independently demoable.
 - ✅ **v1 trained** (test day 2026-09-01): **MAE 1.24 min** (0–20 nm: 1.02, 70–100 nm: 1.51) vs 5.86 min baseline — **79% better**. RMSE 1.73. `@champion` + `@challenger`.
 - ✅ `src/eta_features.py` — shared feature module (`%run` from both train + score), asserts train/serve parity against the model's logged signature.
 - ✅ `src/score_eta.py` (`skywatch_score_eta`, every 10 min, PAUSED): loads `@champion`, scores current inbound aircraft → appends `skywatch.stream.predictions`; rebuilds `predictions_scored` (predictions ⋈ actual touchdowns → the accuracy tile).
-- ⏳ [Genie Code] dashboard v2 — arrival-sequence table (ranked by `predicted_touchdown_ts`) + accuracy tile.
+- ✅ [Genie Code] dashboard v2 — prediction section: arrival-sequence table (ranked by `predicted_touchdown_ts`), accuracy KPIs, error histogram, predicted-vs-actual scatter.
 - ⏳ Retrain on more test days; AutoML cross-check (`run_automl=true`).
+
+**Phase 2 is functionally complete** — Model 1 trained, tuned, registered, scored to Delta, and on the dashboard. Next: **Phase 3, Model 2 (demand forecast).**
 - Scoring job → `predictions` Delta table.
 - **[Genie Code]** dashboard gains the arrival-sequence table and accuracy tile; re-capture.
 - **Platform surface:** Feature Engineering in UC, AutoML, MLflow, Hyperopt, UC Model Registry, `mlflow.pyfunc` batch scoring.
