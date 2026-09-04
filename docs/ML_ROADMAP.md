@@ -346,15 +346,31 @@ holiday flag, optionally a weather covariate later.
 
 ### Model 2
 
-- **Split:** rolling-origin backtest (multiple forecast start points across the held-out period).
-- **Baselines:** seasonal-naive (same bin last week), AutoETS / AutoARIMA (`statsforecast`),
-  AutoML forecasting, **Chronos-Bolt zero-shot** (no fine-tune) — so the fine-tune has to earn
-  its complexity.
-- **Primary metric:** MASE and weighted quantile loss vs each baseline, by horizon (0–1 h /
-  1–2 h / 2–3 h).
-- **Target to beat:** fine-tuned model beats zero-shot and seasonal-naive across all horizons.
-- **Tracking:** fine-tune run logs base model, LoRA/full-FT config, GPU hours, all backtest
-  windows; registered to `skywatch.ml.demand_forecast`.
+**The archive only has the 1st of each month → no day-to-day continuity.** So Model 2 is a
+**within-day forecast**: each day is an independent 96-bin series; given bins `0..T`, predict
+`T+1..T+H` (H = 12 = next 3 h). Near-term demand (0–45 min) comes from aggregating Model 1's
+live ETAs; Model 2 owns 45 min – 3 h.
+
+- **Code (built):** `src/demand_lib.py` (shared `%run` module — baselines, Chronos wrapper,
+  MASE/WQL, `DemandForecastModel` pyfunc wrapper) + `src/forecast_demand.py` /
+  `skywatch_forecast_demand` job. Prototyped locally against a reconstructed series
+  (`statsforecast` + Chronos-Bolt on CPU).
+- **Split:** leave-one-day-out × cut points (`32,44,56,68,80`) → many windows from few days.
+- **Baselines:** climatological mean profile (+ day-of-week), seasonal-naive, `blended`
+  (climatology nudged toward the context tail at short horizon), context-mean, `statsforecast`
+  AutoETS / AutoARIMA.
+- **Foundation model:** Chronos-Bolt zero-shot; fine-tune (AutoGluon-TS) behind `run_finetune`.
+- **Metrics:** MAE, MASE (vs seasonal-naive, < 1 = beats it), weighted quantile loss.
+- **Honest expectation with ≤ ~7 days:** the **climatological mean profile is the model to
+  beat** — classical models and zero-shot Chronos can't infer the day's shape from a partial
+  day, and 3 days is too few to fine-tune. v1 champion is whichever candidate wins the
+  backtest (likely climatology); the fine-tune earns its place at ≥ ~14 backfill days, which
+  is a one-parameter change. Promote to `@champion` only if `MASE < 1`.
+- **Registered:** `skywatch.ml.demand_forecast`, backtest summary + curves logged as an
+  artifact.
+
+*Ordering: PR 5 (touchdown detector recall) should land before Model 2 trains for real —
+`gold_demand_15m` is the detector's direct output and ~80% recall under-counts every bin.*
 
 ### Combined product metric
 
