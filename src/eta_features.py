@@ -7,7 +7,7 @@
 # MAGIC
 # MAGIC Input DataFrame must carry: `ac_type`, `snapshot_ts`, `bearing_to_apt`, and the raw
 # MAGIC kinematics (`dist_to_apt_nm`, `heading_err_deg`, `alt_ft`, `gs_kt`, `vrate_fpm`,
-# MAGIC `closure_nm`, `turn_rate_dps`, `sel_altitude_ft`, `airport_inbound_count`, `phase`).
+# MAGIC `closure_kt`, `turn_rate_dps`, `sel_altitude_ft`, `airport_inbound_count`, `phase`).
 
 # COMMAND ----------
 import math
@@ -31,8 +31,8 @@ _HEAVY = {
 ETA_CAT = ["phase"]
 ETA_FEATURES = [
     "dist_to_apt_nm", "heading_err_deg", "bearing_sin", "bearing_cos", "alt_ft", "gs_kt",
-    "vrate_fpm", "closure_nm", "turn_rate_dps", "sel_altitude_ft", "airport_inbound_count",
-    "hour_sin", "hour_cos", "dow_sin", "dow_cos", "is_heavy", "phase",
+    "vrate_fpm", "closure_kt", "closure_geom_kt", "turn_rate_dps", "sel_altitude_ft",
+    "airport_inbound_count", "hour_sin", "hour_cos", "dow_sin", "dow_cos", "is_heavy", "phase",
 ]
 ETA_TARGET = "minutes_to_touchdown"
 
@@ -51,6 +51,11 @@ def add_eta_features(df):
         .withColumn("dow_cos", F.cos((F.col("dow") - 1) / 7 * two_pi))
         .withColumn("bearing_sin", F.sin(F.radians("bearing_to_apt")))
         .withColumn("bearing_cos", F.cos(F.radians("bearing_to_apt")))
+        # point-wise closure estimate: ground speed projected onto the airport bearing.
+        # No lag, no dt_s -> never null, never cadence-dependent. It covers the first 1-2
+        # reports of every track, where the measured `closure_kt` is null after the segment
+        # guard (and where live scoring first sees a new aircraft).
+        .withColumn("closure_geom_kt", F.col("gs_kt") * F.cos(F.radians("heading_err_deg")))
     )
 
 
