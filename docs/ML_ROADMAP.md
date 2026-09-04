@@ -275,7 +275,7 @@ the first sample; touchdown/holding thresholds still need a full arrival wave to
 
 | Table | Contents |
 |---|---|
-| `gold_tracks` | per `icao` trajectory, ordered, with Δt, derived vertical rate, along-track closure, segment id (gap > 3 min splits) |
+| `gold_tracks` | per `icao` trajectory, ordered, with Δt, derived vertical rate, along-track closure RATE, segment id (gap > 3 min splits) |
 | `gold_touchdowns` | one row per detected landing: `icao, callsign, apt, touchdown_ts` |
 | `gold_arrival_tracks` | inbound trajectory segments joined to their touchdown (the M1 training set) |
 | `gold_demand_15m` | `bin_start_ts, arrivals_in_bin` — the M2 series |
@@ -343,6 +343,31 @@ holiday flag, optionally a weather covariate later.
 - **Tracking:** MLflow autolog + a custom `mlflow.evaluate` metrics table; Hyperopt trials as
   child runs; best model registered to `skywatch.ml.eta_touchdown` with `@challenger`, promoted
   to `@champion` after the held-out check.
+
+#### v1–v3 known issues (fixed in the `fix/gold-closure-rate` PR)
+
+1. **`closure_nm` — two defects.** `gold_tracks` computed it as raw `prev_dist − dist` with no
+   segment guard, so the first report of every arrival (the archive is 3 disjoint days a month
+   apart, `lag()` partitions by `icao` only) pulled `prev_dist` from a prior backfill day —
+   181 training rows with impossible `|closure| > 15 nm`. And it was nm-per-report: ~6.7 nm at
+   60 s backfill cadence vs ~1.7 nm at 15 s live cadence. → `closure_kt` (a rate, guarded on
+   `seg_break = 0`) + `closure_geom_kt` (`gs·cos(heading_err)`, lag-free, covers the first
+   reports). The same unguarded expression also drove `inbound_flag`, which feeds a feature,
+   `gold_kpis`, and the `WHERE inbound_flag` filter in `score_eta`.
+2. **`airport_inbound_count` ring skew.** Backfill keeps aircraft within 100 nm, the live
+   poller within 250 nm; the feature summed all `gold_congestion` rings, so the 100–200 /
+   200–250 rings are empty in training and populated live. → `WHERE ring IN ('00-40','40-100')`
+   in both `build_gold.py` and `score_eta.py`.
+3. **Optimistic test MAE.** The final refit early-stopped on the test day itself. → probe on
+   the validation day for the tree count, refit on train+val at `best_iteration × 1.15`, no
+   test-set peeking. The honest headline is expected slightly above 1.24 min — the leak repaid.
+
+**Deciding the retrain:** the offline test set is all 60 s cadence and *structurally cannot*
+show the serving benefit. Judge the fix on the **cadence-distribution query** — `closure_kt`
+mean/p90 for the 60 s backfill days vs the 15 s live day should converge to within ~10–15%
+(they were ~4× apart on `closure_nm`). The A/B cell (`ab_table_version`, Delta time travel)
+gives the apples-to-apples offline number: promote if `MAE_new ≤ MAE_old + 0.05`; the
+correctness + skew arguments carry it even at flat MAE.
 
 ### Model 2
 
