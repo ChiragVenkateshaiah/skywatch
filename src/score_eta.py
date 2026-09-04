@@ -46,15 +46,20 @@ import pandas as pd
 from mlflow import MlflowClient
 
 mlflow.set_registry_uri("databricks-uc")
-model = mlflow.pyfunc.load_model(f"models:/{MODEL_NAME}@{ALIAS}")
+model_uri = f"models:/{MODEL_NAME}@{ALIAS}"
 mv = MlflowClient().get_model_version_by_alias(MODEL_NAME, ALIAS)
 MODEL_VERSION = int(mv.version)
 
-sig_cols = [c["name"] for c in model.metadata.get_input_schema().to_dict()]
+# parity check against the logged signature ...
+sig_cols = [s["name"] for s in mlflow.models.get_model_info(model_uri).signature.inputs.to_dict()]
 if sig_cols != ETA_FEATURES:
     raise ValueError(
         f"train/serve feature drift:\n  model expects {sig_cols}\n  eta_features gives {ETA_FEATURES}"
     )
+
+# ... but predict on the raw LGBMRegressor: it needs `phase` as a category dtype, which the
+# pyfunc wrapper's schema enforcement (signature says string) rejects.
+model = mlflow.lightgbm.load_model(model_uri)
 print(f"loaded v{MODEL_VERSION}; {len(ETA_FEATURES)} features match the model signature")
 
 # COMMAND ----------
