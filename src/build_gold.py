@@ -277,10 +277,19 @@ print(_at.count(), "training rows |",
 # MAGIC %md
 # MAGIC ## `gold_demand_15m` — the Model 2 series
 # MAGIC Touchdowns bucketed into 15-minute bins. A full 96-bin spine is generated for every date
-# MAGIC that has ≥ 1 arrival, so zero-arrival bins are explicit (the archive only has the 1st of
-# MAGIC each month, so the series is a set of independent full days, not one continuous timeline).
+# MAGIC that clears `min_touchdowns_for_active_day` arrivals, so zero-arrival bins are explicit
+# MAGIC within a real day (the archive only has the 1st of each month, so the series is a set of
+# MAGIC independent full days, not one continuous timeline).
+# MAGIC
+# MAGIC **Day-boundary filter.** A poll target of `HH:MM` on the 1st can land a snapshot whose
+# MAGIC `now` is a few seconds into the prior day (e.g. `2025-08-31T23:59:59`), landing 1-2 stray
+# MAGIC touchdowns on a date nobody actually collected. Left unfiltered, each such date got a full
+# MAGIC spurious 96-bin spine. Real days have 200+ touchdowns; the threshold below is comfortably
+# MAGIC between the two.
 
 # COMMAND ----------
+MIN_TOUCHDOWNS_FOR_ACTIVE_DAY = 20
+
 spark.sql(f"""
 CREATE OR REPLACE TABLE {S}.gold_demand_15m AS
 WITH td AS (
@@ -290,7 +299,12 @@ WITH td AS (
   WHERE touchdown_ts IS NOT NULL
 ),
 counts AS (SELECT apt_icao, bin_start_ts, count(*) AS arrivals FROM td GROUP BY 1, 2),
-active_dates AS (SELECT DISTINCT apt_icao, to_date(bin_start_ts) AS d FROM counts),
+active_dates AS (
+  SELECT apt_icao, to_date(bin_start_ts) AS d
+  FROM td
+  GROUP BY 1, 2
+  HAVING count(*) >= {MIN_TOUCHDOWNS_FOR_ACTIVE_DAY}
+),
 spine AS (
   SELECT apt_icao,
          explode(sequence(to_timestamp(d),
