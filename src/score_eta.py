@@ -63,17 +63,26 @@ print(f"loaded v{MODEL_VERSION}; {len(ETA_FEATURES)} features match the model si
 # COMMAND ----------
 from pyspark.sql import functions as F
 
+# `airport_inbound_count` is joined here exactly as gold_arrival_tracks does it in
+# build_gold.py — keep the two in sync.
 scoring_sdf = add_eta_features(spark.sql(f"""
   WITH latest AS (
     SELECT *, row_number() OVER (PARTITION BY icao ORDER BY snapshot_ts DESC) AS rn
     FROM {STREAM}.gold_tracks
     WHERE snapshot_ts >= (SELECT max(snapshot_ts) FROM {STREAM}.gold_tracks)
                          - INTERVAL {FRESHNESS_MIN} MINUTES
+  ),
+  inbound_ct AS (
+    SELECT minute_ts, apt_icao, sum(n_inbound) AS n_inbound_all_rings
+    FROM {STREAM}.gold_congestion GROUP BY 1, 2
   )
-  SELECT * FROM latest
-  WHERE rn = 1 AND inbound_flag AND NOT is_grounded
-    AND dist_to_apt_nm IS NOT NULL AND dist_to_apt_nm <= {MAX_DIST_NM}
-    AND gs_kt IS NOT NULL AND gs_kt > 40
+  SELECT l.*, coalesce(c.n_inbound_all_rings, 0) AS airport_inbound_count
+  FROM latest l
+  LEFT JOIN inbound_ct c
+    ON c.minute_ts = date_trunc('MINUTE', l.snapshot_ts) AND c.apt_icao = l.apt_icao
+  WHERE l.rn = 1 AND l.inbound_flag AND NOT l.is_grounded
+    AND l.dist_to_apt_nm IS NOT NULL AND l.dist_to_apt_nm <= {MAX_DIST_NM}
+    AND l.gs_kt IS NOT NULL AND l.gs_kt > 40
 """))
 
 score_pdf = eta_pandas(
