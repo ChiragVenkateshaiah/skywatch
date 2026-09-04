@@ -85,10 +85,11 @@ scoring_sdf = add_eta_features(spark.sql(f"""
     AND l.gs_kt IS NOT NULL AND l.gs_kt > 40
 """))
 
+# dist_to_apt_nm / gs_kt / alt_ft / heading_err_deg are already in ETA_FEATURES — don't
+# re-list them (duplicate pandas columns break MLflow schema enforcement)
 score_pdf = eta_pandas(
     scoring_sdf.select(
-        "icao", "callsign", "ac_type", "apt_icao", "snapshot_ts",
-        "dist_to_apt_nm", "gs_kt", "alt_ft", "heading_err_deg", *ETA_FEATURES
+        "icao", "callsign", "ac_type", "apt_icao", "snapshot_ts", *ETA_FEATURES
     ).toPandas()
 )
 print(f"{len(score_pdf)} inbound aircraft to score "
@@ -108,7 +109,7 @@ if len(score_pdf) == 0:
 # pandas category dtype. LightGBM re-maps the string via the categories stored at fit time.
 _X = score_pdf[ETA_FEATURES].copy()
 _X["phase"] = _X["phase"].astype(str)
-score_pdf["predicted_eta_min"] = pd.Series(model.predict(_X)).clip(lower=0).to_numpy()
+score_pdf["predicted_eta_min"] = model.predict(_X).clip(min=0)
 score_pdf["predicted_touchdown_ts"] = (
     score_pdf["snapshot_ts"] + pd.to_timedelta(score_pdf["predicted_eta_min"], unit="m")
 )
