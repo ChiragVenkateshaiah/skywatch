@@ -209,10 +209,15 @@ print(spark.table(f"{S}.gold_touchdowns").count(), "rows")
 spark.sql(f"""
 CREATE OR REPLACE TABLE {S}.gold_arrival_tracks AS
 WITH inbound_ct AS (
-  SELECT minute_ts, apt_icao, sum(n_inbound) AS n_inbound_all_rings
-  FROM {S}.gold_congestion GROUP BY 1, 2
+  -- only the rings BOTH data sources cover: backfill keeps aircraft within 100 nm,
+  -- the live poller within 250 nm. Counting all rings makes the feature systematically
+  -- larger at serving time than the model ever saw. Keep this identical to score_eta.py.
+  SELECT minute_ts, apt_icao, sum(n_inbound) AS n_inbound_common_rings
+  FROM {S}.gold_congestion
+  WHERE ring IN ('00-40', '40-100')
+  GROUP BY 1, 2
 )
-SELECT
+SELECT /*+ BROADCAST(c) */
   t.seg_id, t.icao, t.callsign, t.ac_type, t.apt_icao,
   t.snapshot_ts,
   td.touchdown_ts,
@@ -224,7 +229,7 @@ SELECT
   t.gs_kt, t.track_deg, t.vrate_fpm, t.turn_rate_dps, t.closure_kt, t.phase,
   hour(t.snapshot_ts)                                 AS hour_utc,
   dayofweek(t.snapshot_ts)                            AS dow,
-  coalesce(c.n_inbound_all_rings, 0)                  AS airport_inbound_count
+  coalesce(c.n_inbound_common_rings, 0)               AS airport_inbound_count
 FROM {S}.gold_tracks t
 JOIN {S}.gold_touchdowns td ON td.seg_id = t.seg_id
 LEFT JOIN inbound_ct c
