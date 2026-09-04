@@ -175,7 +175,11 @@ with mlflow.start_run(run_name="eta_hyperopt") as parent_run:
     print(f"best val MAE = {best_val_mae:.3f} min   params={best}")
 
 # COMMAND ----------
-# MAGIC %md ## 5. Refit on train+val, evaluate on the test day, register
+# MAGIC %md ## 5. Refit, evaluate on the held-out test day, register
+# MAGIC
+# MAGIC The test day is touched exactly once, for the headline number. Tree count is learned
+# MAGIC by early-stopping on the **validation** day, then the model is refit on train+val at
+# MAGIC `best_iteration * 1.15` (≈ 15% more trees for the ≈ 50% more data) with no callback.
 
 # COMMAND ----------
 from mlflow.models import infer_signature
@@ -187,18 +191,24 @@ best_params = {
     "bagging_fraction": float(best["bagging_fraction"]),
     "min_child_samples": int(best["min_child_samples"]),
     "lambda_l2": float(best["lambda_l2"]),
-    "objective": "mae", "n_estimators": 2000, "n_jobs": -1, "verbose": -1,
+    "objective": "mae", "n_jobs": -1, "verbose": -1,
 }
 
 X_trval = pd.concat([X_tr, X_va])
 y_trval = pd.concat([y_tr, y_va])
 
 with mlflow.start_run(run_name="eta_final") as final_run:
-    # early-stopping iteration count learned during tuning, applied here via a val tail
-    fit_model = lgb.LGBMRegressor(**best_params)
-    fit_model.fit(X_trval, y_trval, eval_set=[(X_te, y_te)], eval_metric="mae",
-                  categorical_feature=CAT_IDX,
-                  callbacks=[lgb.early_stopping(50, verbose=False)])
+    # stage 1 — learn the tree count on a real held-out validation day
+    probe = lgb.LGBMRegressor(**best_params, n_estimators=2000)
+    probe.fit(X_tr, y_tr, eval_set=[(X_va, y_va)], eval_metric="mae",
+              categorical_feature=CAT_IDX,
+              callbacks=[lgb.early_stopping(50, verbose=False)])
+    n_final = max(50, round((probe.best_iteration_ or 2000) * 1.15))
+
+    # stage 2 — refit on train + val at a fixed tree count, no peeking at the test day
+    fit_model = lgb.LGBMRegressor(**best_params, n_estimators=n_final)
+    fit_model.fit(X_trval, y_trval, categorical_feature=CAT_IDX)
+    mlflow.log_metric("n_estimators_final", n_final)
 
     pred_te = fit_model.predict(X_te)
     model_tbl = by_band(test, pred_te, y_te.values)
