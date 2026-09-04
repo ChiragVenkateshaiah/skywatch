@@ -106,7 +106,22 @@ FROM derived
 print(spark.table(f"{S}.gold_tracks").count(), "rows")
 
 # COMMAND ----------
-# MAGIC %md ## `gold_congestion` — minute × distance ring
+# MAGIC %md
+# MAGIC ## `gold_congestion` — minute × distance ring
+# MAGIC
+# MAGIC **Coverage boundary: 100 nm.** The historical backfill (`backfill_local.py`) only ever
+# MAGIC captured aircraft within 100 nm — pulling further out means re-downloading every source
+# MAGIC file (the radius filter is applied *after* download, so it doesn't reduce transfer), which
+# MAGIC isn't worth it: nothing in the project actually uses distance beyond ~120 nm (Model 1's
+# MAGIC evaluated bands top out at 100 nm, `score_eta.py`'s `max_dist_nm` default is 120). The live
+# MAGIC poller captures out to 250 nm, so the `100-200` / `200-250` rings below are **populated only
+# MAGIC for live snapshots** — on every backfill day those two ring rows are simply absent (not
+# MAGIC zero — `GROUP BY` never emits a ring with no matching aircraft). Do not build a model
+# MAGIC feature or a cross-day aggregate on those two rings; `airport_inbound_count` in
+# MAGIC `gold_arrival_tracks` / `score_eta.py` already restricts to `00-40`/`40-100` for exactly
+# MAGIC this reason. The two outer buckets are informational (live "how far out can we see")
+# MAGIC only. *(Simplification tracked for the PR 5 gold rebuild: merge them into one `100+`
+# MAGIC bucket, or drop them, so the schema stops implying coverage it doesn't have.)*
 
 # COMMAND ----------
 spark.sql(f"""
@@ -116,8 +131,8 @@ SELECT
   apt_icao,
   CASE WHEN dist_to_apt_nm < 40  THEN '00-40'
        WHEN dist_to_apt_nm < 100 THEN '40-100'
-       WHEN dist_to_apt_nm < 200 THEN '100-200'
-       ELSE '200-250' END AS ring,
+       WHEN dist_to_apt_nm < 200 THEN '100-200'   -- live-only, see note above
+       ELSE '200-250' END AS ring,                -- live-only, see note above
   count(DISTINCT icao)                                     AS n_aircraft,
   count(DISTINCT CASE WHEN inbound_flag THEN icao END)     AS n_inbound,
   round(avg(alt_ft))                                       AS mean_alt_ft,

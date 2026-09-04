@@ -375,6 +375,11 @@ correctness + skew arguments carry it even at flat MAE.
 - Ring skew confirmed: backfill days have **zero** rows in the 100–200 / 200–250 rings; the
   live day has more inbound there (383 + 282) than in the near rings. `airport_inbound_count`
   is model-importance rank 7 — the fix mattered.
+  **100 nm is now the formal coverage boundary** — re-downloading backfill at 250 nm would cost
+  another ~50 GB for range nothing in the project uses (M1's evaluated bands and `score_eta`'s
+  `max_dist_nm` both top out at ~100–120 nm), so it's not being done. The `100-200`/`200-250`
+  rings in `gold_congestion` stay live-only/informational (documented in `build_gold.py`);
+  simplifying that bucket schema is folded into the PR 5 gold rebuild.
 - **v4** (18 features, honest val early-stopping): test MAE **1.232** on 2026-09-01,
   RMSE 1.738, by band 1.05 / 1.19 / 1.41 / 1.48 nm, 79 % better than baseline. The *honest*
   number on 9 days matches the old *optimistic* 1.240 on 3 days — the leak repaid by more data.
