@@ -9,7 +9,7 @@
 # MAGIC
 # MAGIC | Table | Grain | Notes |
 # MAGIC |---|---|---|
-# MAGIC | `gold_tracks` | one row per report | + Δt, Δalt-derived vertical rate, along-track closure, turn rate, `seg_id` (gap > 3 min splits), `inbound_flag` |
+# MAGIC | `gold_tracks` | one row per report | + Δt, Δalt-derived vertical rate, along-track closure rate, turn rate, `seg_id` (gap > 3 min splits), `inbound_flag` |
 # MAGIC | `gold_congestion` | minute × ring | inbound / total counts, mean alt / gs / ETA per ring |
 # MAGIC | `gold_holding` | one row per circling aircraft | circular-variance heading spread in a small box — currently flags *any* circling (light a/c, military); airline-hold tuning is a TODO |
 # MAGIC | `gold_touchdowns` | one row per landing | **first-cut thresholds** — tune against a full arrival wave |
@@ -72,8 +72,12 @@ derived AS (
     -- depends on descent_reports; keep it stable across this PR)
     CASE WHEN dt_s BETWEEN 1 AND 600 THEN (alt_ft - prev_alt_ft) / dt_s * 60.0 END AS derived_vrate_fpm,
     -- closure / turn / "closing" are gated on seg_break = 0 (dt_s in 1..180, same track) so a
-    -- cross-day lag can never produce a value
-    CASE WHEN seg_break = 0 THEN (prev_dist_nm - dist_to_apt_nm) END AS closure_nm,
+    -- cross-day lag can never produce a value.
+    -- closure_kt = a RATE (nm closed per hour = kt), so 60 s backfill and 15 s live cadence
+    -- give the same number for the same approach. Clamp implausible values from bad fixes.
+    CASE WHEN seg_break = 0
+           AND abs((prev_dist_nm - dist_to_apt_nm) / dt_s * 3600) <= 700
+         THEN (prev_dist_nm - dist_to_apt_nm) / dt_s * 3600 END AS closure_kt,
     CASE WHEN seg_break = 0 AND prev_track_deg IS NOT NULL
          THEN least(abs(track_deg - prev_track_deg), 360 - abs(track_deg - prev_track_deg)) END AS turn_deg,
     CASE WHEN seg_break = 0 AND prev_dist_nm > dist_to_apt_nm THEN 1 ELSE 0 END AS closing_step
@@ -84,7 +88,7 @@ SELECT
   lat, lon, alt_ft, alt_geom_ft, gs_kt, track_deg, sel_altitude_ft,
   dist_to_apt_nm, bearing_to_apt, heading_err_deg, is_grounded, phase,
   CASE WHEN seg_break = 0 THEN dt_s END AS dt_s,   -- null at a segment boundary (no cross-day step)
-  closure_nm, turn_deg,
+  closure_kt, turn_deg,
   coalesce(vertical_rate_fpm, derived_vrate_fpm) AS vrate_fpm,
   coalesce(vertical_rate_src, CASE WHEN derived_vrate_fpm IS NOT NULL THEN 'delta' END) AS vrate_src,
   CASE WHEN turn_deg IS NOT NULL THEN turn_deg / dt_s END AS turn_rate_dps,
@@ -217,7 +221,7 @@ SELECT
   -- features
   t.dist_to_apt_nm, t.bearing_to_apt, t.heading_err_deg,
   t.alt_ft, t.alt_geom_ft, t.sel_altitude_ft,
-  t.gs_kt, t.track_deg, t.vrate_fpm, t.turn_rate_dps, t.closure_nm, t.phase,
+  t.gs_kt, t.track_deg, t.vrate_fpm, t.turn_rate_dps, t.closure_kt, t.phase,
   hour(t.snapshot_ts)                                 AS hour_utc,
   dayofweek(t.snapshot_ts)                            AS dow,
   coalesce(c.n_inbound_all_rings, 0)                  AS airport_inbound_count
