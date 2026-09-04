@@ -279,7 +279,7 @@ the first sample; touchdown/holding thresholds still need a full arrival wave to
 | `gold_touchdowns` | one row per detected landing: `icao, callsign, apt, touchdown_ts` |
 | `gold_arrival_tracks` | inbound trajectory segments joined to their touchdown (the M1 training set) |
 | `gold_demand_15m` | `bin_start_ts, arrivals_in_bin` — the M2 series |
-| `gold_congestion` | per minute: inbound aircraft count within 40 / 100 / 200 / 250 NM rings, mean gs/alt per ring. "Inbound" = 3+ consecutive decreasing-`dist_to_apt_nm` obs (EDA: single-snapshot heuristic is unreliable) |
+| `gold_congestion` | per minute: inbound aircraft count within `00-40` / `40-100` / `100+` NM rings (`100+` is live-only/informational — backfill's 100 nm coverage boundary, §7), mean gs/alt per ring. "Inbound" = 3+ consecutive decreasing-`dist_to_apt_nm` obs (EDA: single-snapshot heuristic is unreliable) |
 | `gold_holding` | racetrack detection — circular-variance heading spread over a rolling window in a small bounding box near the airport (reuses the metric from `src/skywatch_lite.py`) |
 | `gold_kpis` | dashboard tiles: current inbound count, next-hour predicted arrivals, AAR headroom, mean holding time |
 
@@ -379,7 +379,8 @@ correctness + skew arguments carry it even at flat MAE.
   another ~50 GB for range nothing in the project uses (M1's evaluated bands and `score_eta`'s
   `max_dist_nm` both top out at ~100–120 nm), so it's not being done. The `100-200`/`200-250`
   rings in `gold_congestion` stay live-only/informational (documented in `build_gold.py`);
-  simplifying that bucket schema is folded into the PR 5 gold rebuild.
+  merged into a single `100+` bucket in PR 5 so the schema stops implying precision the data
+  never had on 9 of 10 collection days.
 - **v4** (18 features, honest val early-stopping): test MAE **1.232** on 2026-09-01,
   RMSE 1.738, by band 1.05 / 1.19 / 1.41 / 1.48 nm, 79 % better than baseline. The *honest*
   number on 9 days matches the old *optimistic* 1.240 on 3 days — the leak repaid by more data.
