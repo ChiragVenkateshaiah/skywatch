@@ -49,9 +49,11 @@ def add_eta_features(df):
 
 
 def eta_pandas(pdf):
-    """Post-`toPandas()` cleanup: Spark round() yields decimal.Decimal — force float; make
-    `phase` a category so LightGBM treats it natively."""
-    num = [c for c in ETA_FEATURES if c not in ETA_CAT]
-    pdf[num] = pdf[num].astype("float64")
+    """Post-`toPandas()` cleanup: Spark round() yields decimal.Decimal — force every numeric
+    column to float; make `phase` a category so LightGBM treats it natively."""
+    num = [c for c in ETA_FEATURES if c not in ETA_CAT] + [ETA_TARGET, "baseline_pred"]
+    for c in num:
+        if c in pdf.columns:
+            pdf[c] = pdf[c].astype("float64")
     pdf["phase"] = pdf["phase"].fillna("unknown").astype("category")
     return pdf
