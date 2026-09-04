@@ -12,7 +12,7 @@
 # MAGIC | `gold_tracks` | one row per report | + Δt, Δalt-derived vertical rate, along-track closure rate, turn rate, `seg_id` (gap > 3 min splits), `inbound_flag` |
 # MAGIC | `gold_congestion` | minute × ring | inbound / total counts, mean alt / gs / ETA per ring |
 # MAGIC | `gold_holding` | one row per circling aircraft | circular-variance heading spread in a small box — currently flags *any* circling (light a/c, military); airline-hold tuning is a TODO |
-# MAGIC | `gold_touchdowns` | one row per landing | **first-cut thresholds** — tune against a full arrival wave |
+# MAGIC | `gold_touchdowns` | one row per landing | widened for sparse-cadence recall; `touchdown_confidence` = confirmed / inferred |
 # MAGIC | `gold_arrival_tracks` | one row per (aircraft, time) pre-touchdown | the **Model 1** training set; label `minutes_to_touchdown` |
 # MAGIC | `gold_demand_15m` | one row per 15-min bin per active day | the **Model 2** series; zero bins explicit |
 # MAGIC | `gold_kpis` | one row | dashboard headline numbers |
@@ -179,9 +179,21 @@ ORDER BY heading_spread DESC
 print(spark.table(f"{S}.gold_holding").count(), "rows")
 
 # COMMAND ----------
-# MAGIC %md ## `gold_touchdowns` — detected landings
-# MAGIC **First-cut thresholds.** `touchdown_ts` = first on-ground report within 3 nm of the field,
-# MAGIC else the last airborne short-final report. Validate + tune against a full arrival wave.
+# MAGIC %md
+# MAGIC ## `gold_touchdowns` — detected landings
+# MAGIC `touchdown_ts` = first on-ground report within 3 nm of the field, else the last airborne
+# MAGIC short-final report. Two widths:
+# MAGIC - **candidate window** (`sf`) — wide enough that a sparse-cadence track still lands at
+# MAGIC   least one report inside it. At 180 s cadence and ~200 kt, consecutive reports are up to
+# MAGIC   ~10 nm apart, so the original 4 nm / +1500 ft window missed most sparse-day arrivals
+# MAGIC   entirely (~360/day observed vs ~1,070/day on the 60 s days — a detector problem, not a
+# MAGIC   traffic difference).
+# MAGIC - **acceptance gate** — looser than before for the same reason: requiring a report within
+# MAGIC   3 nm / +500 ft (the original acceptance) is often simply never observed at 180 s cadence.
+# MAGIC   `touchdown_confidence` records which gate a row actually met — `confirmed` (saw it that
+# MAGIC   close) vs `inferred` (extrapolated from a report only as close as the wider acceptance
+# MAGIC   allows). Use `confirmed` where label precision matters (e.g. tightening Model 1's
+# MAGIC   labels further); `inferred` is fine for 15-minute demand bucketing.
 
 # COMMAND ----------
 spark.sql(f"""
@@ -190,7 +202,7 @@ WITH sf AS (
   SELECT seg_id, icao, callsign, ac_type, apt_icao, snapshot_ts,
          dist_to_apt_nm, alt_ft, gs_kt, is_grounded, vrate_fpm
   FROM {S}.gold_tracks
-  WHERE dist_to_apt_nm < 4 AND alt_ft <= {APT_ELEV_FT} + 1500 AND gs_kt BETWEEN 25 AND 190
+  WHERE dist_to_apt_nm < 8 AND alt_ft <= {APT_ELEV_FT} + 4000 AND gs_kt BETWEEN 25 AND 250
 ),
 seg AS (
   SELECT
@@ -207,8 +219,11 @@ seg AS (
   FROM sf
   GROUP BY seg_id, icao
 )
-SELECT * FROM seg
-WHERE min_dist_nm < 3 AND min_alt_ft <= {APT_ELEV_FT} + 500 AND descent_reports >= 1
+SELECT *,
+  CASE WHEN min_dist_nm < 3 AND min_alt_ft <= {APT_ELEV_FT} + 500
+       THEN 'confirmed' ELSE 'inferred' END AS touchdown_confidence
+FROM seg
+WHERE min_dist_nm < 6 AND min_alt_ft <= {APT_ELEV_FT} + 2000 AND descent_reports >= 1
 """)
 print(spark.table(f"{S}.gold_touchdowns").count(), "rows")
 
