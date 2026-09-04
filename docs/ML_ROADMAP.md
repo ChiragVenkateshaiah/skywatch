@@ -279,7 +279,7 @@ the first sample; touchdown/holding thresholds still need a full arrival wave to
 | `gold_touchdowns` | one row per detected landing: `icao, callsign, apt, touchdown_ts` |
 | `gold_arrival_tracks` | inbound trajectory segments joined to their touchdown (the M1 training set) |
 | `gold_demand_15m` | `bin_start_ts, arrivals_in_bin` — the M2 series |
-| `gold_congestion` | per minute: inbound aircraft count within 40 / 100 / 200 / 250 NM rings, mean gs/alt per ring. "Inbound" = 3+ consecutive decreasing-`dist_to_apt_nm` obs (EDA: single-snapshot heuristic is unreliable) |
+| `gold_congestion` | per minute: inbound aircraft count within `00-40` / `40-100` / `100+` NM rings (`100+` is live-only/informational — backfill's 100 nm coverage boundary, §7), mean gs/alt per ring. "Inbound" = 3+ consecutive decreasing-`dist_to_apt_nm` obs (EDA: single-snapshot heuristic is unreliable) |
 | `gold_holding` | racetrack detection — circular-variance heading spread over a rolling window in a small bounding box near the airport (reuses the metric from `src/skywatch_lite.py`) |
 | `gold_kpis` | dashboard tiles: current inbound count, next-hour predicted arrivals, AAR headroom, mean holding time |
 
@@ -379,7 +379,8 @@ correctness + skew arguments carry it even at flat MAE.
   another ~50 GB for range nothing in the project uses (M1's evaluated bands and `score_eta`'s
   `max_dist_nm` both top out at ~100–120 nm), so it's not being done. The `100-200`/`200-250`
   rings in `gold_congestion` stay live-only/informational (documented in `build_gold.py`);
-  simplifying that bucket schema is folded into the PR 5 gold rebuild.
+  merged into a single `100+` bucket in PR 5 so the schema stops implying precision the data
+  never had on 9 of 10 collection days.
 - **v4** (18 features, honest val early-stopping): test MAE **1.232** on 2026-09-01,
   RMSE 1.738, by band 1.05 / 1.19 / 1.41 / 1.48 nm, 79 % better than baseline. The *honest*
   number on 9 days matches the old *optimistic* 1.240 on 3 days — the leak repaid by more data.
@@ -390,6 +391,29 @@ correctness + skew arguments carry it even at flat MAE.
   was the 3-day / `closure_nm` build). Not blocking given the cadence check + flat MAE.
 - Known follow-up: day-boundary snapshots create ~7 junk days in `gold_demand_15m`
   (1 – 2 arrivals, full 96-bin spine each) — filter in `build_gold.py` (PR 5 / M2 prep).
+
+**PR 5 result (2026-09-04):**
+- Widened `gold_touchdowns`' candidate/acceptance window for sparse-cadence recall (§5.4):
+  180 s-day detection jumped from ~360/day to **810–1,067/day** (was under-counting by ~3×),
+  60 s days ticked up too (~1,090 → ~1,110). Added `touchdown_confidence`
+  (`confirmed`/`inferred`). `gold_demand_15m` junk days gone (**864 = 9 × 96** bins exactly).
+  `gold_congestion` merged to 3 ring buckets (`00-40`/`40-100`/`100+`).
+- **This measurably hurt Model 1** at first: retraining on the widened (all-confidence) labels
+  gave **v5: MAE 1.326** (vs v4's 1.232) — the ~40% `inferred` labels on sparse days are real
+  label noise for `minutes_to_touchdown`, worst at 0–20 nm (1.05 → 1.28).
+- Fix: `train_eta.py` now trains only on `touchdown_confidence = 'confirmed'` rows (M2 is
+  unaffected — it counts touchdowns regardless of confidence). **v6: MAE 1.266**, RMSE 1.783,
+  78.3 % vs baseline. Recovered 0–20 nm to **1.01** (better than v4), but 70–100 nm regressed to
+  1.59 (from 1.48) — `n_estimators_final` dropped to 50 (from 223), suggesting the confirmed-
+  only subset shifted what the model needs at long range. Registered `@champion`; the residual
+  long-range gap vs v4 is a known, documented limitation rather than a re-tuned fix — not worth
+  another Hyperopt search for ~0.03 min on the current data size.
+
+| Version | Change | MAE | 0–20 nm | 70–100 nm |
+|---|---|---|---|---|
+| v4 | closure_kt fix, 9 days, all touchdowns | 1.232 | 1.05 | 1.48 |
+| v5 | + widened detector, all touchdowns | 1.326 | 1.28 | 1.44 |
+| **v6** | + confirmed-only filter | **1.266** | **1.01** | 1.59 |
 
 ### Model 2
 
@@ -416,8 +440,9 @@ live ETAs; Model 2 owns 45 min – 3 h.
 - **Registered:** `skywatch.ml.demand_forecast`, backtest summary + curves logged as an
   artifact.
 
-*Ordering: PR 5 (touchdown detector recall) should land before Model 2 trains for real —
-`gold_demand_15m` is the detector's direct output and ~80% recall under-counts every bin.*
+*Ordering: PR 5 (touchdown detector recall) done — `gold_demand_15m` is now 9 clean days
+(864 = 9×96 bins, junk day-boundary dates dropped) with detection much closer to real traffic
+on the sparse-cadence days. Model 2's training run is next.*
 
 ### Combined product metric
 

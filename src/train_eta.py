@@ -44,8 +44,18 @@ print(f"train set: {STREAM}.gold_arrival_tracks | test day: {TEST_DATE} | model:
 # MAGIC %run ./eta_features
 
 # COMMAND ----------
-# MAGIC %md ## 1. Load + feature engineering
+# MAGIC %md
+# MAGIC ## 1. Load + feature engineering
 # MAGIC Features come from `eta_features.py` (shared with `score_eta.py`).
+# MAGIC
+# MAGIC **Trains only on `confirmed` touchdowns.** `gold_touchdowns` widened its candidate/
+# MAGIC acceptance window for sparse-cadence recall (`build_gold.py`), which added ~40% `inferred`
+# MAGIC labels on the 180 s backfill days — real touchdown time extrapolated from a report that
+# MAGIC was never observed closer than ~6 nm / 2000 ft. That's fine for Model 2's 15-min demand
+# MAGIC bucketing, but it's label noise for `minutes_to_touchdown` and it measurably hurt Model 1
+# MAGIC (test MAE 1.232 → 1.326, the 0–20 nm band worst-hit: 1.05 → 1.28). `confirmed` rows are
+# MAGIC still ~99% of the dense 60 s days and ~60% of the sparse days — plenty of arrivals, with
+# MAGIC the timing precision the label needs.
 
 # COMMAND ----------
 import numpy as np
@@ -56,8 +66,13 @@ FEATURES = ETA_FEATURES
 FEATURES_CAT = ETA_CAT
 TARGET = ETA_TARGET
 
+confirmed_segs = (spark.table(f"{STREAM}.gold_touchdowns")
+                  .where(F.col("touchdown_confidence") == "confirmed")
+                  .select("seg_id"))
+
 sdf = add_eta_features(
     spark.table(f"{STREAM}.gold_arrival_tracks")
+    .join(confirmed_segs, "seg_id")
     .where(F.col(TARGET).between(0.5, 40))
     .where(F.col("dist_to_apt_nm").isNotNull() & F.col("gs_kt").isNotNull()
            & F.col("alt_ft").isNotNull())

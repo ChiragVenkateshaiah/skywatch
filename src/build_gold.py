@@ -12,7 +12,7 @@
 # MAGIC | `gold_tracks` | one row per report | + Δt, Δalt-derived vertical rate, along-track closure rate, turn rate, `seg_id` (gap > 3 min splits), `inbound_flag` |
 # MAGIC | `gold_congestion` | minute × ring | inbound / total counts, mean alt / gs / ETA per ring |
 # MAGIC | `gold_holding` | one row per circling aircraft | circular-variance heading spread in a small box — currently flags *any* circling (light a/c, military); airline-hold tuning is a TODO |
-# MAGIC | `gold_touchdowns` | one row per landing | **first-cut thresholds** — tune against a full arrival wave |
+# MAGIC | `gold_touchdowns` | one row per landing | widened for sparse-cadence recall; `touchdown_confidence` = confirmed / inferred |
 # MAGIC | `gold_arrival_tracks` | one row per (aircraft, time) pre-touchdown | the **Model 1** training set; label `minutes_to_touchdown` |
 # MAGIC | `gold_demand_15m` | one row per 15-min bin per active day | the **Model 2** series; zero bins explicit |
 # MAGIC | `gold_kpis` | one row | dashboard headline numbers |
@@ -114,14 +114,14 @@ print(spark.table(f"{S}.gold_tracks").count(), "rows")
 # MAGIC file (the radius filter is applied *after* download, so it doesn't reduce transfer), which
 # MAGIC isn't worth it: nothing in the project actually uses distance beyond ~120 nm (Model 1's
 # MAGIC evaluated bands top out at 100 nm, `score_eta.py`'s `max_dist_nm` default is 120). The live
-# MAGIC poller captures out to 250 nm, so the `100-200` / `200-250` rings below are **populated only
-# MAGIC for live snapshots** — on every backfill day those two ring rows are simply absent (not
-# MAGIC zero — `GROUP BY` never emits a ring with no matching aircraft). Do not build a model
-# MAGIC feature or a cross-day aggregate on those two rings; `airport_inbound_count` in
-# MAGIC `gold_arrival_tracks` / `score_eta.py` already restricts to `00-40`/`40-100` for exactly
-# MAGIC this reason. The two outer buckets are informational (live "how far out can we see")
-# MAGIC only. *(Simplification tracked for the PR 5 gold rebuild: merge them into one `100+`
-# MAGIC bucket, or drop them, so the schema stops implying coverage it doesn't have.)*
+# MAGIC poller captures out to 250 nm, so anything past 100 nm is **populated only for live
+# MAGIC snapshots** — on every backfill day that was two separate, silently-empty ring rows (not
+# MAGIC zero — `GROUP BY` never emits a ring with no matching aircraft; the emptiness was only
+# MAGIC visible if you went looking). Merged into one `100+` bucket: still informational (live
+# MAGIC "how far out can we see"), but the schema no longer implies a precision (100–200 vs
+# MAGIC 200–250) the data never had for 9 of our 10 collection days. Do not build a model feature
+# MAGIC or a cross-day aggregate on it; `airport_inbound_count` in `gold_arrival_tracks` /
+# MAGIC `score_eta.py` already restricts to `00-40`/`40-100` for exactly this reason.
 
 # COMMAND ----------
 spark.sql(f"""
@@ -131,8 +131,7 @@ SELECT
   apt_icao,
   CASE WHEN dist_to_apt_nm < 40  THEN '00-40'
        WHEN dist_to_apt_nm < 100 THEN '40-100'
-       WHEN dist_to_apt_nm < 200 THEN '100-200'   -- live-only, see note above
-       ELSE '200-250' END AS ring,                -- live-only, see note above
+       ELSE '100+' END AS ring,   -- live-only / informational, see note above
   count(DISTINCT icao)                                     AS n_aircraft,
   count(DISTINCT CASE WHEN inbound_flag THEN icao END)     AS n_inbound,
   round(avg(alt_ft))                                       AS mean_alt_ft,
@@ -179,9 +178,21 @@ ORDER BY heading_spread DESC
 print(spark.table(f"{S}.gold_holding").count(), "rows")
 
 # COMMAND ----------
-# MAGIC %md ## `gold_touchdowns` — detected landings
-# MAGIC **First-cut thresholds.** `touchdown_ts` = first on-ground report within 3 nm of the field,
-# MAGIC else the last airborne short-final report. Validate + tune against a full arrival wave.
+# MAGIC %md
+# MAGIC ## `gold_touchdowns` — detected landings
+# MAGIC `touchdown_ts` = first on-ground report within 3 nm of the field, else the last airborne
+# MAGIC short-final report. Two widths:
+# MAGIC - **candidate window** (`sf`) — wide enough that a sparse-cadence track still lands at
+# MAGIC   least one report inside it. At 180 s cadence and ~200 kt, consecutive reports are up to
+# MAGIC   ~10 nm apart, so the original 4 nm / +1500 ft window missed most sparse-day arrivals
+# MAGIC   entirely (~360/day observed vs ~1,070/day on the 60 s days — a detector problem, not a
+# MAGIC   traffic difference).
+# MAGIC - **acceptance gate** — looser than before for the same reason: requiring a report within
+# MAGIC   3 nm / +500 ft (the original acceptance) is often simply never observed at 180 s cadence.
+# MAGIC   `touchdown_confidence` records which gate a row actually met — `confirmed` (saw it that
+# MAGIC   close) vs `inferred` (extrapolated from a report only as close as the wider acceptance
+# MAGIC   allows). Use `confirmed` where label precision matters (e.g. tightening Model 1's
+# MAGIC   labels further); `inferred` is fine for 15-minute demand bucketing.
 
 # COMMAND ----------
 spark.sql(f"""
@@ -190,7 +201,7 @@ WITH sf AS (
   SELECT seg_id, icao, callsign, ac_type, apt_icao, snapshot_ts,
          dist_to_apt_nm, alt_ft, gs_kt, is_grounded, vrate_fpm
   FROM {S}.gold_tracks
-  WHERE dist_to_apt_nm < 4 AND alt_ft <= {APT_ELEV_FT} + 1500 AND gs_kt BETWEEN 25 AND 190
+  WHERE dist_to_apt_nm < 8 AND alt_ft <= {APT_ELEV_FT} + 4000 AND gs_kt BETWEEN 25 AND 250
 ),
 seg AS (
   SELECT
@@ -207,8 +218,11 @@ seg AS (
   FROM sf
   GROUP BY seg_id, icao
 )
-SELECT * FROM seg
-WHERE min_dist_nm < 3 AND min_alt_ft <= {APT_ELEV_FT} + 500 AND descent_reports >= 1
+SELECT *,
+  CASE WHEN min_dist_nm < 3 AND min_alt_ft <= {APT_ELEV_FT} + 500
+       THEN 'confirmed' ELSE 'inferred' END AS touchdown_confidence
+FROM seg
+WHERE min_dist_nm < 6 AND min_alt_ft <= {APT_ELEV_FT} + 2000 AND descent_reports >= 1
 """)
 print(spark.table(f"{S}.gold_touchdowns").count(), "rows")
 
@@ -262,10 +276,19 @@ print(_at.count(), "training rows |",
 # MAGIC %md
 # MAGIC ## `gold_demand_15m` — the Model 2 series
 # MAGIC Touchdowns bucketed into 15-minute bins. A full 96-bin spine is generated for every date
-# MAGIC that has ≥ 1 arrival, so zero-arrival bins are explicit (the archive only has the 1st of
-# MAGIC each month, so the series is a set of independent full days, not one continuous timeline).
+# MAGIC that clears `min_touchdowns_for_active_day` arrivals, so zero-arrival bins are explicit
+# MAGIC within a real day (the archive only has the 1st of each month, so the series is a set of
+# MAGIC independent full days, not one continuous timeline).
+# MAGIC
+# MAGIC **Day-boundary filter.** A poll target of `HH:MM` on the 1st can land a snapshot whose
+# MAGIC `now` is a few seconds into the prior day (e.g. `2025-08-31T23:59:59`), landing 1-2 stray
+# MAGIC touchdowns on a date nobody actually collected. Left unfiltered, each such date got a full
+# MAGIC spurious 96-bin spine. Real days have 200+ touchdowns; the threshold below is comfortably
+# MAGIC between the two.
 
 # COMMAND ----------
+MIN_TOUCHDOWNS_FOR_ACTIVE_DAY = 20
+
 spark.sql(f"""
 CREATE OR REPLACE TABLE {S}.gold_demand_15m AS
 WITH td AS (
@@ -275,7 +298,12 @@ WITH td AS (
   WHERE touchdown_ts IS NOT NULL
 ),
 counts AS (SELECT apt_icao, bin_start_ts, count(*) AS arrivals FROM td GROUP BY 1, 2),
-active_dates AS (SELECT DISTINCT apt_icao, to_date(bin_start_ts) AS d FROM counts),
+active_dates AS (
+  SELECT apt_icao, to_date(bin_start_ts) AS d
+  FROM td
+  GROUP BY 1, 2
+  HAVING count(*) >= {MIN_TOUCHDOWNS_FOR_ACTIVE_DAY}
+),
 spine AS (
   SELECT apt_icao,
          explode(sequence(to_timestamp(d),
