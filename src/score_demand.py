@@ -10,9 +10,18 @@
 # MAGIC a real historical day/time for validation — the live poller runs on a schedule, so "today"
 # MAGIC often has little or no context yet, and pinning lets the whole `predict()` path be
 # MAGIC exercised against real data instead of waiting for a fresh collection window.
+# MAGIC
+# MAGIC **`chronos-forecasting` is installed even though the champion is climatology mode.**
+# MAGIC The logged `DemandForecastModel` pickle captured a live reference to `demand_lib.py`'s
+# MAGIC module-level Chronos pipeline cache (populated during the training backtest's zero-shot
+# MAGIC baseline calls), so unpickling *any* version of this model currently needs `chronos`/
+# MAGIC `torch` importable regardless of which mode it runs in. Follow-up, no retrain needed
+# MAGIC today: give `DemandForecastModel` a `__getstate__`/`__setstate__` that only pickles its
+# MAGIC plain-data attributes (`mode`, `horizon`, `profile`, `chronos_model_id`), then a future
+# MAGIC retrain will log a lighter, cache-free model and this install line can drop back to `scipy`.
 
 # COMMAND ----------
-# MAGIC %pip install -q scipy
+# MAGIC %pip install -q scipy chronos-forecasting
 # MAGIC %restart_python
 
 # COMMAND ----------
