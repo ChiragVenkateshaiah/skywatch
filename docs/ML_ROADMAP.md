@@ -444,6 +444,33 @@ live ETAs; Model 2 owns 45 min – 3 h.
 (864 = 9×96 bins, junk day-boundary dates dropped) with detection much closer to real traffic
 on the sparse-cadence days. Model 2's training run is next.*
 
+**Training run result (2026-09-05), 9 days / 45 leave-one-day-out windows:**
+
+| Model | MAE | MASE |
+|---|---|---|
+| **climatological_mean** | **2.92** | **0.79** ✅ champion |
+| blended | 3.34 | 0.92 |
+| climatological_dow | 3.40 | 0.92 |
+| seasonal_naive | 3.85 | 1.00 |
+| AutoETS | 4.47 | 1.28 |
+| AutoARIMA | 5.08 | 1.41 |
+| chronos_bolt_zeroshot | 5.20 | 1.46 |
+| context_mean | 5.27 | 1.49 |
+
+The honest expectation held exactly: the **plain climatological mean profile wins** — 21%
+better than seasonal-naive, 44% better than zero-shot Chronos. Neither the classical models
+nor the foundation model can infer a day's shape from a partial-day context at this data size.
+
+A genuinely useful wrinkle: **`climatological_dow` (day-of-week split) is *worse* than the
+undifferentiated mean** (3.40 vs 2.92) — with 9 days, splitting by weekday leaves only 1–2
+reference days per bucket, and the noisier per-bucket estimate costs more than the
+specificity gains. Revisit day-of-week splitting once there are more days per weekday.
+
+Registered `skywatch.ml.demand_forecast` v1 → `@champion` + `@challenger`. **Fine-tune not
+run** — climatology's margin over zero-shot Chronos (44%) makes it unlikely to help yet, and
+the ≥14-day threshold above isn't met at 9 days; documented as the decision rather than
+spending the quota to confirm it. Revisit when backfill grows.
+
 ### Combined product metric
 
 End-to-end: MAE of the **stitched demand curve** (M1 aggregate + M2) against actuals, and
@@ -568,12 +595,13 @@ Each phase is independently demoable.
 - **Platform surface:** Feature Engineering in UC, AutoML, MLflow, Hyperopt, UC Model Registry, `mlflow.pyfunc` batch scoring.
 
 ### Phase 3 — Model 2: demand forecast  *(fine-tuning centrepiece)*
-- Build `gold_demand_15m`; construct backtest windows.
-- Baselines: seasonal-naive, `statsforecast` AutoETS/AutoARIMA, AutoML forecast, Chronos-Bolt zero-shot.
-- Fine-tune Chronos-Bolt on serverless GPU (CPU fallback); log GPU hours, config, all backtests.
-- Register to UC; scoring job extends to write `demand_forecast`.
-- **[Genie Code]** dashboard + App show the stitched M1+M2 demand curve and surge alerts.
-- **Platform surface:** serverless GPU, foundation-model fine-tuning, MLflow, rolling-origin backtesting.
+- ✅ Built `gold_demand_15m` (864 clean bins); leave-one-day-out × cut-point backtest windows (45).
+- ✅ Baselines: seasonal-naive, climatology (± dow, blended), `statsforecast` AutoETS/AutoARIMA, Chronos-Bolt zero-shot.
+- ✅ **v1 trained** (2026-09-05): champion = **climatological_mean, MAE 2.92, MASE 0.79** — beats seasonal-naive 21%, zero-shot Chronos 44%. `climatological_dow` underperforms the plain mean at this data size (noisier per-weekday buckets).
+- ⏳ Fine-tune Chronos-Bolt — deferred, climatology's margin makes it unlikely to help yet; revisit at ≥14 backfill days.
+- ✅ Registered to UC (`skywatch.ml.demand_forecast` `@champion`).
+- ⏳ Scoring job (`score_demand.py`) to write live forecasts; **[Genie Code]** dashboard section for the demand curve.
+- **Platform surface:** MLflow, rolling-origin backtesting, `statsforecast`, Chronos-Bolt (zero-shot), UC Model Registry.
 
 ### Phase 4 — Databricks App  *(serve)*
 - Streamlit app: live map, arrival sequence, demand curve, surge alerts, click-to-predict.
