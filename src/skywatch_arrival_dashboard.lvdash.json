@@ -236,6 +236,66 @@
         "ORDER BY\n",
         "  snapshot_ts DESC"
       ]
+    },
+    {
+      "displayName": "Historical Demand by Hour",
+      "name": "gold_demand_hourly",
+      "queryLines": [
+        "SELECT\n",
+        "  hour_utc,\n",
+        "  AVG(arrivals) AS avg_arrivals\n",
+        "FROM\n",
+        "  skywatch.stream.gold_demand_15m\n",
+        "WHERE\n",
+        "  apt_icao = 'KATL'\n",
+        "GROUP BY\n",
+        "  hour_utc\n",
+        "ORDER BY\n",
+        "  hour_utc"
+      ]
+    },
+    {
+      "columns": [
+        {
+          "displayName": "q10_rounded",
+          "expression": "ROUND(`predicted_q10`, 1)"
+        },
+        {
+          "displayName": "mean_rounded",
+          "expression": "ROUND(`predicted_mean`, 1)"
+        },
+        {
+          "displayName": "q90_rounded",
+          "expression": "ROUND(`predicted_q90`, 1)"
+        }
+      ],
+      "displayName": "Latest Demand Forecast",
+      "name": "demand_forecast_latest",
+      "queryLines": [
+        "SELECT\n",
+        "  scored_at,\n",
+        "  model_version,\n",
+        "  apt_icao,\n",
+        "  bin_start_ts,\n",
+        "  horizon_step,\n",
+        "  arrivals_so_far,\n",
+        "  predicted_q10,\n",
+        "  predicted_q50,\n",
+        "  predicted_q90,\n",
+        "  predicted_mean\n",
+        "FROM\n",
+        "  skywatch.stream.demand_forecast\n",
+        "WHERE\n",
+        "  scored_at\n",
+        "    = (\n",
+        "      SELECT\n",
+        "        MAX(scored_at)\n",
+        "      FROM\n",
+        "        skywatch.stream.demand_forecast\n",
+        "    )\n",
+        "ORDER BY\n",
+        "  horizon_step"
+      ]
     }
   ],
   "pages": [
@@ -477,12 +537,12 @@
             "height": 2,
             "width": 12,
             "x": 0,
-            "y": 64
+            "y": 96
           },
           "widget": {
             "multilineTextboxSpec": {
               "lines": [
-                "Data: adsb.lol (ODbL) · KATL (Hartsfield–Jackson) · live poll, 250 nm radius · predictions: Model 1 (time-to-touchdown)"
+                "Data: adsb.lol (ODbL) · KATL (Hartsfield–Jackson) · live poll, 250 nm radius · Model 1 (time-to-touchdown) · Model 2 (15-min arrival demand forecast)"
               ]
             },
             "name": "footer_text"
@@ -1306,6 +1366,388 @@
               },
               "version": 3,
               "widgetType": "scatter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 2,
+            "width": 12,
+            "x": 0,
+            "y": 66
+          },
+          "widget": {
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Arrival Manager — Model 2 (demand forecast)"
+              ]
+            },
+            "name": "header_demand"
+          }
+        },
+        {
+          "position": {
+            "height": 4,
+            "width": 3,
+            "x": 0,
+            "y": 68
+          },
+          "widget": {
+            "name": "counter_arrivals_today",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "demand_forecast_latest",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "MAX(`arrivals_so_far`)",
+                      "name": "max(arrivals_so_far)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "data": {
+                "queryName": "main_query"
+              },
+              "encodings": {
+                "value": {
+                  "fieldName": "max(arrivals_so_far)",
+                  "rowNumber": 0
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Arrivals today (so far)"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 4,
+            "width": 3,
+            "x": 3,
+            "y": 68
+          },
+          "widget": {
+            "name": "counter_predicted_3h",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "demand_forecast_latest",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "SUM(`predicted_mean`)",
+                      "name": "sum(predicted_mean)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "data": {
+                "queryName": "main_query"
+              },
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(predicted_mean)",
+                  "rowNumber": 0
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Predicted next 3h"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 4,
+            "width": 3,
+            "x": 6,
+            "y": 68
+          },
+          "widget": {
+            "name": "counter_peak_bin",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "demand_forecast_latest",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "MAX(`predicted_mean`)",
+                      "name": "max(predicted_mean)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "data": {
+                "queryName": "main_query"
+              },
+              "encodings": {
+                "value": {
+                  "fieldName": "max(predicted_mean)",
+                  "rowNumber": 0
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Peak predicted 15-min bin"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 4,
+            "width": 3,
+            "x": 9,
+            "y": 68
+          },
+          "widget": {
+            "name": "counter_demand_model",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "demand_forecast_latest",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "MAX(`model_version`)",
+                      "name": "max(model_version)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "data": {
+                "queryName": "main_query"
+              },
+              "encodings": {
+                "value": {
+                  "fieldName": "max(model_version)",
+                  "rowNumber": 0
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Model version"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 8,
+            "width": 12,
+            "x": 0,
+            "y": 80
+          },
+          "widget": {
+            "name": "line_historical_demand",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "gold_demand_hourly",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`hour_utc`",
+                      "name": "hour_utc"
+                    },
+                    {
+                      "expression": "SUM(`avg_arrivals`)",
+                      "name": "sum(avg_arrivals)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "data": {
+                "queryName": "main_query"
+              },
+              "encodings": {
+                "x": {
+                  "displayName": "hour_utc",
+                  "fieldName": "hour_utc",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "displayName": "avg arrivals per 15-min bin",
+                  "fieldName": "sum(avg_arrivals)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Typical KATL arrival profile by hour (UTC), all collected days averaged"
+              },
+              "version": 3,
+              "widgetType": "line"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 8,
+            "width": 12,
+            "x": 0,
+            "y": 88
+          },
+          "widget": {
+            "name": "table_forecast_detail",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "demand_forecast_latest",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "expression": "`bin_start_ts`",
+                      "name": "bin_start_ts"
+                    },
+                    {
+                      "expression": "`q10_rounded`",
+                      "name": "q10_rounded"
+                    },
+                    {
+                      "expression": "`mean_rounded`",
+                      "name": "mean_rounded"
+                    },
+                    {
+                      "expression": "`q90_rounded`",
+                      "name": "q90_rounded"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "data": {
+                "queryName": "main_query"
+              },
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "bin_start_ts"
+                  },
+                  {
+                    "fieldName": "q10_rounded"
+                  },
+                  {
+                    "fieldName": "mean_rounded"
+                  },
+                  {
+                    "fieldName": "q90_rounded"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Forecast detail"
+              },
+              "version": 2,
+              "widgetType": "table"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 8,
+            "width": 12,
+            "x": 0,
+            "y": 72
+          },
+          "widget": {
+            "name": "forecast_prediction_intervals",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "demand_forecast_latest",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "expression": "`bin_start_ts`",
+                      "name": "bin_start_ts"
+                    },
+                    {
+                      "expression": "`predicted_mean`",
+                      "name": "predicted_mean"
+                    },
+                    {
+                      "expression": "`predicted_q90`",
+                      "name": "predicted_q90"
+                    },
+                    {
+                      "expression": "`predicted_q10`",
+                      "name": "predicted_q10"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "data": {
+                "queryName": "main_query"
+              },
+              "encodings": {
+                "x": {
+                  "fieldName": "bin_start_ts",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "error": {
+                    "lower": {
+                      "fieldName": "predicted_q10"
+                    },
+                    "type": "absolute",
+                    "upper": {
+                      "fieldName": "predicted_q90"
+                    }
+                  },
+                  "fieldName": "predicted_mean",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Next 3 hours — predicted arrivals per 15 min (q10–q90 band)"
+              },
+              "version": 3,
+              "widgetType": "line"
             }
           }
         }
