@@ -120,6 +120,12 @@ variables:
   demand_run_finetune:
     description: Fine-tune Chronos-Bolt (needs GPU + >= ~14 backfill days to be worth it).
     default: "false"
+  demand_score_date:
+    description: Pin score_demand.py to a real historical day (YYYY-MM-DD) for validation. Blank = today.
+    default: ""
+  demand_as_of_bin:
+    description: Pin score_demand.py's as-of 15-min bin (0-95) for validation. Blank = current time.
+    default: ""
 
 targets:
   dev:
