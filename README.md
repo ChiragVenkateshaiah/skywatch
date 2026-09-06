@@ -11,6 +11,46 @@ an **Arrival Manager** (per-flight touchdown-time prediction + arrival demand fo
 served through a Databricks App, exercising the full Databricks ML platform. Includes a
 Free Edition vs Production capability matrix.
 
+---
+
+## What SkyWatch does — the Arrival Manager
+
+*The one-page version. Full pitch: [`pitch.md`](pitch.md).*
+
+At a busy hub like Atlanta, **arrival demand is spiky** — sometimes more aircraft want to land in
+a 15-minute window than the runways can accept. Controllers absorb the overflow with holding and
+vectoring, which burns fuel and pushes delay downstream, and it's hard to see coming. Real
+systems that manage this (Eurocontrol AMAN, FAA TBFM) are expensive infrastructure. The signal
+they run on — live aircraft position and speed — is exactly what **ADS-B transponder data gives
+us for free**.
+
+SkyWatch turns that free stream into an **Arrival Manager** built on two models:
+
+| | **Model 1 — Time-to-touchdown** | **Model 2 — Arrival demand forecast** |
+|---|---|---|
+| **Question** | For *this* aircraft, right now, how many minutes until it lands at KATL? | How many aircraft will land in each future 15-minute bin, out to +3 h? |
+| **ML shape** | Tabular **regression** — one row per position report | Univariate **time-series forecast** — one value per 15-min bin |
+| **Label** | `minutes_to_touchdown`, self-supervised from detected landings on historical trajectories | count of landings per bin (same detection, aggregated) |
+| **Algorithm** | LightGBM + Hyperopt, ~111k reports / 9 days | bake-off (seasonal-naive, AutoETS/ARIMA, Chronos-Bolt); **climatological mean** won |
+| **Result** | **MAE ≈ 1.3 min** vs a 5.9 min "distance ÷ speed" baseline (~79% better) | **MASE 0.79** — beats seasonal-naive by 21%, the foundation model by 44% |
+| **Powers** | the **predicted arrival sequence** (landing order + timing) | the **demand curve + surge alerts** vs the Airport Acceptance Rate |
+
+**How they combine:** Model 1's per-flight ETAs cover **0–45 min out** (real airborne aircraft,
+precise); Model 2's statistical forecast covers **45 min – 3 h** (aircraft not yet airborne or in
+range). Stitched together they give one continuous "arrivals expected" curve against the runway
+capacity line.
+
+> **Analogy:** Model 1 is Google Maps ETA for each individual car heading toward a bridge.
+> Model 2 is the rush-hour traffic forecast for that bridge over the next 3 hours. Together you
+> know both *who arrives when* and *whether the total will exceed what the bridge can handle.*
+
+These are two genuinely different ML problems — "predict an outcome from an object's current
+state" vs. "predict a quantity's future from its history" — with different data shapes,
+algorithms, and metrics. Both are served to a coordinator through a Streamlit **Databricks App**
+that reads the batch-scored predictions from Delta (Free Edition has no model-serving endpoints).
+
+---
+
 ## Data source
 
 `https://samples.adsbexchange.com/readsb-hist/<yyyy>/<mm>/<dd>/` — one global snapshot every
