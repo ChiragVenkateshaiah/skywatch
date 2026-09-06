@@ -57,6 +57,18 @@ variables:
   radius_nm:
     description: Capture radius around the airport, nm (adsb.lol max 250).
     default: "250"
+  apt_aar_per_hour:
+    description: >-
+      Airport Acceptance Rate, arrivals/hour — the Arrival Manager App's surge threshold
+      (KATL good-weather ~90). Also set in app/app.yaml env for the running app.
+    default: "90"
+
+  # --- Arrival Manager App (app/ + resources/skywatch.app.yml) ---
+  warehouse_id:
+    description: >-
+      SQL warehouse the App reads the serving tables through (also the warehouse used for
+      ad-hoc Gold builds). Get it from the SQL Warehouses page / `databricks warehouses list`.
+    default: "8fd481cbf45ac93e"
 
   # --- Live poller (src/poller.py + resources/skywatch.poller.job.yml) ---
   api_base_url:

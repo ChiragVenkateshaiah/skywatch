@@ -1,0 +1,23 @@
+# Databricks App entry point — SkyWatch Arrival Manager (Streamlit).
+# The Apps runtime expects the process to listen on port 8000.
+command:
+  - streamlit
+  - run
+  - app.py
+  - --server.port=8000
+  - --server.address=0.0.0.0
+
+env:
+  # Injected from the `warehouse` resource declared in resources/skywatch.app.yml
+  # (the app service principal is granted CAN_USE on it).
+  - name: SKYWATCH_WAREHOUSE_ID
+    valueFrom: warehouse
+  - name: SKYWATCH_CATALOG
+    value: skywatch
+  - name: SKYWATCH_SCHEMA
+    value: stream
+  - name: SKYWATCH_APT_ICAO
+    value: KATL
+  # Airport Acceptance Rate (arrivals/hour) — the surge threshold. KATL good-weather ~90.
+  - name: SKYWATCH_AAR_PER_HOUR
+    value: "90"

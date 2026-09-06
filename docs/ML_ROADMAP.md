@@ -576,9 +576,13 @@ Each phase is independently demoable.
 - **Platform surface:** serverless GPU, foundation-model fine-tuning, MLflow, rolling-origin backtesting.
 
 ### Phase 4 — Databricks App  *(serve)*
-- Streamlit app: live map, arrival sequence, demand curve, surge alerts, click-to-predict.
+- ✅ **v1 — `app/` (Streamlit) + `resources/skywatch.app.yml`.** Arrival sequence (M1), 3 h demand
+  forecast vs AAR with q10–q90 band + typical-hour reference (M2), derived surge alerts, KPI row.
+  Reads the serving Delta tables via the SQL Statement Execution API with the app service
+  principal (no PAT). Bundled as an `apps` resource; `warehouse_id` / `apt_aar_per_hour` bundle vars.
+- ⏳ Next: deck.gl live map; click-to-predict (in-process `eta_touchdown@champion` load + per-feature
+  contributions); scheduled restart job to beat the 24 h auto-stop.
 - In-app model load for interactive M1 predictions (Free) / REST to endpoint (prod).
-- Bundle the app; scheduled restart to beat the 24 h auto-stop.
 - **Platform surface:** Databricks Apps, SQL warehouse connectivity, service-principal auth, secrets.
 
 ### Phase 5 — Model 3: irregularity early-warning  *(second use case)*
