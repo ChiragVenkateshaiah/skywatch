@@ -499,6 +499,18 @@ run** — climatology's margin over zero-shot Chronos (44%) makes it unlikely to
 the ≥14-day threshold above isn't met at 9 days; documented as the decision rather than
 spending the quota to confirm it. Revisit when backfill grows.
 
+**v2 — pickle fix (2026-09-07).** v1's logged pyfunc pickle captured `demand_lib.py`'s
+module-level Chronos pipeline cache (populated by the backtest's zero-shot baseline calls), so
+unpickling *any* v1 model needed `torch` / `chronos` even though the champion runs pure
+climatology — `score_demand.py` had to install `chronos-forecasting` as a workaround.
+`DemandForecastModel` now (a) loads Chronos **inline** inside `_one` instead of referencing the
+module helper, so the class holds no path to the cache, (b) has `__getstate__` /`__setstate__`
+that pickle only `mode` / `horizon` / `profile` / `chronos_model_id`, and (c) the Chronos cache
+moved to `functools.lru_cache` (on the function, not a module global). `pip_requirements` now
+drops `chronos-forecasting` for a climatology champion. Same backtest, same numbers (MAE 2.915,
+MASE 0.790); v2 verified to load and score on a `scipy`-only env — `score_demand.py` produced
+byte-identical output to the v1 run (2026-09-01 12:00 Z: arrivals-so-far 270, mean 20.0).
+
 ### Combined product metric
 
 End-to-end: MAE of the **stitched demand curve** (M1 aggregate + M2) against actuals, and

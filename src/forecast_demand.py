@@ -157,6 +157,10 @@ for d in days:
         prof.setdefault(("*", s), []).append(float(a))
 prof = {k: float(np.nanmean(v)) for k, v in prof.items()}
 
+# drop the backtest's cached Chronos pipeline before we pickle anything — belt-and-suspenders
+# on top of the wrapper no longer referencing the module-level helpers at all
+_load_chronos_pipeline.cache_clear()
+
 mode = "chronos" if champ_name == "chronos_bolt_zeroshot" else "climatology"
 wrapper = DemandForecastModel(mode=mode, horizon=H, profile=prof,
                               chronos_model_id="amazon/chronos-bolt-small")
@@ -177,10 +181,12 @@ with mlflow.start_run(run_name="demand_forecast") as run:
     mlflow.log_dict({"summary": summary.reset_index().to_dict("records"),
                      "curves": curves}, "backtest.json")
 
+    # climatology serving needs only scipy; chronos-forecasting is added only when the
+    # champion actually runs Chronos at predict time
+    reqs = ["scipy", "pandas", "numpy"] + (["chronos-forecasting"] if mode == "chronos" else [])
     sig = infer_signature(example, pred_example)
     mlflow.pyfunc.log_model("model", python_model=wrapper, signature=sig,
-                            input_example=example,
-                            pip_requirements=["chronos-forecasting", "scipy", "pandas", "numpy"])
+                            input_example=example, pip_requirements=reqs)
     model_uri = f"runs:/{run.info.run_id}/model"
 
 from mlflow import MlflowClient

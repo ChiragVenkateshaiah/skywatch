@@ -81,25 +81,30 @@ def statsforecast_forecast(context, h):
 
 
 # --------------------------------------------------------------------- Chronos
-_CHRONOS = {}
+# Backtest-only. `_load_chronos_pipeline` caches on the function object (functools.lru_cache),
+# not in a module global, so nothing a pickled model could reach holds a live torch model.
+# The serving wrapper below does NOT call these — it loads Chronos inline (see `_one`).
+from functools import lru_cache
 
 
-def chronos_pipeline(model_id="amazon/chronos-bolt-small", device="cpu"):
+@lru_cache(maxsize=4)
+def _load_chronos_pipeline(model_id="amazon/chronos-bolt-small", device="cpu"):
     import torch
     from chronos import BaseChronosPipeline
 
-    key = (model_id, device)
-    if key not in _CHRONOS:
-        _CHRONOS[key] = BaseChronosPipeline.from_pretrained(
-            model_id, device_map=device, torch_dtype=torch.float32)
-    return _CHRONOS[key]
+    return BaseChronosPipeline.from_pretrained(
+        model_id, device_map=device, torch_dtype=torch.float32)
+
+
+def chronos_pipeline(model_id="amazon/chronos-bolt-small", device="cpu"):
+    return _load_chronos_pipeline(model_id, device)
 
 
 def chronos_forecast(context, h, model_id="amazon/chronos-bolt-small", device="cpu"):
     """Returns (median array(h), quantiles array(h, len(QUANTILES)))."""
     import torch
 
-    q, _ = chronos_pipeline(model_id, device).predict_quantiles(
+    q, _ = _load_chronos_pipeline(model_id, device).predict_quantiles(
         torch.tensor(np.asarray(context, float), dtype=torch.float32),
         prediction_length=h, quantile_levels=QUANTILES)
     qa = q[0].cpu().numpy().clip(min=0)
@@ -136,8 +141,13 @@ try:
         forecast request — columns `context` (list[float], arrivals in bins 0..T of the day),
         `dow` (int), `horizon` (int, <= trained H). Output: columns q10..q90, plus `mean`.
 
-        `climatology` mode carries the per-(dow, slot) profile; `chronos` mode carries a
-        model id and calls the pipeline. The profile is small enough to pickle."""
+        `climatology` mode carries the per-(dow, slot) profile; `chronos` mode carries a model
+        id and loads the pipeline **inline** (a local import inside `_one`) — the class holds no
+        reference to any module-level Chronos helper, so a pickled model never drags `torch` /
+        `chronos` into the pickle and climatology-mode serving needs only `scipy`. `__getstate__`
+        pickles the four plain-data attributes and nothing else."""
+
+        _STATE = ("mode", "horizon", "profile", "chronos_model_id")
 
         def __init__(self, mode, horizon, profile=None, chronos_model_id=None):
             self.mode = mode
@@ -145,12 +155,30 @@ try:
             self.profile = profile                # dict[(dow, slot)] -> mean, for climatology
             self.chronos_model_id = chronos_model_id
 
+        def __getstate__(self):
+            return {k: getattr(self, k) for k in self._STATE}
+
+        def __setstate__(self, state):
+            for k in self._STATE:
+                setattr(self, k, state.get(k))
+
+        def _chronos_quantiles(self, context, horizon):
+            import torch
+            from chronos import BaseChronosPipeline
+
+            pipe = BaseChronosPipeline.from_pretrained(
+                self.chronos_model_id or "amazon/chronos-bolt-small",
+                device_map="cpu", torch_dtype=torch.float32)
+            q, _ = pipe.predict_quantiles(
+                torch.tensor(np.asarray(context, float), dtype=torch.float32),
+                prediction_length=horizon, quantile_levels=QUANTILES)
+            return q[0].cpu().numpy().clip(min=0)
+
         def _one(self, context, dow, horizon):
             start = len(context)
             slots = [(start + i) % BINS_PER_DAY for i in range(horizon)]
             if self.mode == "chronos":
-                _, qa = chronos_forecast(context, horizon, self.chronos_model_id)
-                return qa
+                return self._chronos_quantiles(context, horizon)
             # climatology: point profile + a Poisson-ish spread for the quantiles
             mu = np.array([self.profile.get((dow, s), self.profile.get(("*", s), 0.0))
                            for s in slots])
