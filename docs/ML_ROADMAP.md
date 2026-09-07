@@ -415,6 +415,34 @@ correctness + skew arguments carry it even at flat MAE.
 | v5 | + widened detector, all touchdowns | 1.326 | 1.28 | 1.44 |
 | **v6** | + confirmed-only filter | **1.266** | **1.01** | 1.59 |
 
+#### Gold build — incremental / two-mode (PR 4, 2026-09-07)
+
+`build_gold.py` was a full `CREATE OR REPLACE` of every table on every run, re-reading all of
+`silver_positions`. Now:
+
+- **`mode` parameter.** `full` = rebuild everything (before a retrain / after a backfill).
+  `serving` = rewrite only the last `serving_hours` of `gold_tracks` / `gold_congestion` /
+  `gold_touchdowns` / `gold_holding` / `gold_kpis` via Delta `INSERT … REPLACE WHERE`, and
+  **skip** `gold_arrival_tracks` / `gold_demand_15m` (only needed at retrain time). For the
+  scheduled behind-the-poller run: `bundle deploy --var="gold_mode=serving"`.
+- **`seg_id` is now deterministic** — `icao + '-' + <segment-start timestamp>` instead of a
+  running `sum(seg_break)`. Identical no matter how far back the scan reaches, which is what
+  makes the incremental window safe. A `serving` scan starts `seg_lookback_hours` (2 h) before
+  the write cutoff so every `LAG` and segment boundary in the window has real neighbours.
+- **Liquid clustering** (`CLUSTER BY` on `icao,snapshot_ts` / `apt_icao,minute_ts` /
+  `apt_icao,touchdown_ts` / …) + `delta.autoOptimize` on all Gold tables.
+- **`gold_holding` correctness fix (bundled):** was `GROUP BY icao` over all history, which
+  merged an airframe's disjoint backfill days into one row whose bounding box then failed the
+  `ns_nm <= 15` gate — *suppressing* real circling events. Now `GROUP BY seg_id` (one continuous
+  track). Effect: **130 → 866 rows** across the 9-day set (still includes GA pattern-work /
+  military orbits — the airline-hold filter is a separate TODO).
+
+**Verification (2026-09-07):** a `serving` run over a pinned 6 h window produced **byte-identical**
+output (row counts + `bit_xor(xxhash64(...))` over the affected slice) to a `full` rebuild, while
+touching ~8.5 k of 1.19 M `gold_tracks` rows and leaving the training tables untouched.
+`full`-mode counts unchanged from the pre-PR baseline (1,192,616 tracks / 85,256 segments /
+9,072 touchdowns / 111,459 arrival-track rows / 864 demand bins).
+
 ### Model 2
 
 **The archive only has the 1st of each month → no day-to-day continuity.** So Model 2 is a
