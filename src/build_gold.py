@@ -12,7 +12,7 @@
 # MAGIC | mode | what it does | when |
 # MAGIC |---|---|---|
 # MAGIC | **`full`** (default) | full `CREATE OR REPLACE` of every table from all of history | before a model retrain; after a backfill; first run |
-# MAGIC | **`serving`** | only the last `serving_hours` of `gold_tracks` / `gold_congestion` / `gold_touchdowns` / `gold_holding` / `gold_kpis`, via Delta `REPLACE WHERE`; **skips** the training tables | behind the live poller, every N min |
+# MAGIC | **`serving`** | only the last `serving_hours` of `gold_tracks` / `gold_congestion` / `gold_touchdowns` / `gold_holding` / `gold_irregularities` / `gold_kpis`, via Delta `REPLACE WHERE`; **skips** the training tables | behind the live poller, every N min |
 # MAGIC
 # MAGIC `serving` mode never rebuilds `gold_arrival_tracks` (Model 1 set) or `gold_demand_15m`
 # MAGIC (Model 2 series) — those only matter at retrain time, so re-deriving them every 10 min is
@@ -34,6 +34,7 @@
 # MAGIC | `gold_congestion` | minute × ring | `apt_icao, minute_ts` |
 # MAGIC | `gold_holding` | one row per circling segment | — (small) |
 # MAGIC | `gold_touchdowns` | one row per landing | `apt_icao, touchdown_ts` |
+# MAGIC | `gold_irregularities` | one row per segment with an arrival irregularity — **Model 3** (rules) | `apt_icao, event_ts` |
 # MAGIC | `gold_arrival_tracks` | one row per (aircraft, time) pre-touchdown — **Model 1** set | `apt_icao, snapshot_ts` |
 # MAGIC | `gold_demand_15m` | one row per 15-min bin per active day — **Model 2** series | `apt_icao, bin_start_ts` |
 # MAGIC | `gold_kpis` | one row | — |
@@ -113,7 +114,7 @@ WITH ordered AS (
   SELECT
     icao, callsign, ac_type, apt_icao, snapshot_ts,
     lat, lon, alt_ft, alt_geom_ft, gs_kt, track_deg, sel_altitude_ft,
-    vertical_rate_fpm, vertical_rate_src,
+    vertical_rate_fpm, vertical_rate_src, squawk, emergency,
     dist_to_apt_nm, bearing_to_apt, heading_err_deg, is_grounded, phase,
     lag(snapshot_ts)    OVER w AS prev_ts,
     lag(alt_ft)         OVER w AS prev_alt_ft,
@@ -162,6 +163,7 @@ SELECT
   seg_id, icao, callsign, ac_type, apt_icao, snapshot_ts,
   lat, lon, alt_ft, alt_geom_ft, gs_kt, track_deg, sel_altitude_ft,
   dist_to_apt_nm, bearing_to_apt, heading_err_deg, is_grounded, phase,
+  squawk, emergency,
   CASE WHEN seg_break = 0 THEN dt_s END AS dt_s,   -- null at a segment boundary (no cross-day step)
   closure_kt, turn_deg,
   coalesce(vertical_rate_fpm, derived_vrate_fpm) AS vrate_fpm,
@@ -309,6 +311,110 @@ WHERE min_dist_nm < 6 AND min_alt_ft <= {APT_ELEV_FT} + 2000 AND descent_reports
 
 # COMMAND ----------
 # MAGIC %md
+# MAGIC ## `gold_irregularities` — Model 3 (rule-based)
+# MAGIC
+# MAGIC One row per segment that shows an arrival irregularity. **These are rules, not a learned
+# MAGIC model** — the labelled event volume in the archive (see roadmap §7) is 10–40× below what a
+# MAGIC classifier needs: ~4 emergency aircraft, ~25 plausible airline holds across 9 days, and no
+# MAGIC cleanly-separable go-arounds at 180 s cadence (a go-around's low point is 0–1 reports, and
+# MAGIC departures climb out through the same funnel). The learned Model 3 is a Phase-6 item gated
+# MAGIC on continuous live collection; these rules are the deliverable now and drive the live
+# MAGIC `irregularity_flags` early-warning (`src/score_irregularities.py`).
+# MAGIC
+# MAGIC | kind | rule |
+# MAGIC |---|---|
+# MAGIC | `emergency` | `squawk ∈ {7500,7600,7700}` or `emergency` field set |
+# MAGIC | `holding` | in `gold_holding` **and** a plausible flow-control hold: mean alt ≥ 6000 ft, 5–60 nm out, ≥ 10 reports |
+# MAGIC | `go_around` | a descending on-approach report (< 5 nm, < field+2500 ft, vrate < −250, heading_err < 50) **then later in the same segment** a climb-out (> field+3500 ft, vrate > +300, > 7 nm) with no touchdown, or a touchdown > 4 min after the climb-out. Coded; ≈ 0 in the archive — will populate on live data. |
+
+# COMMAND ----------
+emit(
+    "gold_irregularities",
+    f"""
+WITH seg_meta AS (
+  SELECT seg_id,
+         any_value(icao) AS icao, any_value(callsign) AS callsign,
+         any_value(ac_type) AS ac_type, any_value(apt_icao) AS apt_icao,
+         round(min(dist_to_apt_nm), 1) AS min_dist_nm, cast(max(alt_ft) AS double) AS max_alt_ft
+  FROM {S}.gold_tracks
+  WHERE {TRACKS_SCAN_WIDE}
+  GROUP BY seg_id
+),
+td AS (SELECT seg_id, min(touchdown_ts) AS td_ts FROM {S}.gold_touchdowns GROUP BY seg_id),
+appr AS (
+  SELECT seg_id, min(snapshot_ts) AS appr_ts
+  FROM {S}.gold_tracks
+  WHERE dist_to_apt_nm < 5 AND alt_ft < {APT_ELEV_FT} + 2500 AND vrate_fpm < -250
+    AND heading_err_deg < 50 AND NOT is_grounded AND {TRACKS_SCAN_WIDE}
+  GROUP BY seg_id
+),
+climb AS (
+  SELECT g.seg_id, min(g.snapshot_ts) AS climb_ts
+  FROM {S}.gold_tracks g JOIN appr a ON g.seg_id = a.seg_id
+  WHERE g.snapshot_ts > a.appr_ts AND g.alt_ft > {APT_ELEV_FT} + 3500
+    AND g.vrate_fpm > 300 AND g.dist_to_apt_nm > 7
+  GROUP BY g.seg_id
+)
+-- emergency
+SELECT
+  m.seg_id, m.icao, m.callsign, m.ac_type, m.apt_icao,
+  'emergency' AS kind,
+  e.event_ts,
+  m.min_dist_nm AS dist_nm, m.max_alt_ft AS alt_ft,
+  CASE WHEN td.seg_id IS NOT NULL THEN 1 ELSE 0 END AS landed,
+  e.detail,
+  1.0 AS confidence
+FROM (
+  SELECT seg_id,
+         min(snapshot_ts) AS event_ts,
+         concat_ws(' ',
+           nullif(concat('squawk=', max(CASE WHEN squawk IN ('7500','7600','7700') THEN squawk END)), 'squawk='),
+           nullif(concat('emergency=', max(CASE WHEN lower(emergency) NOT IN ('none','') THEN emergency END)), 'emergency=')
+         ) AS detail
+  FROM {S}.gold_tracks
+  WHERE (squawk IN ('7500','7600','7700') OR (emergency IS NOT NULL AND lower(emergency) NOT IN ('none','')))
+    AND {TRACKS_SCAN_WIDE}
+  GROUP BY seg_id
+) e
+JOIN seg_meta m ON m.seg_id = e.seg_id
+LEFT JOIN td ON td.seg_id = e.seg_id
+
+UNION ALL
+-- holding (plausible flow-control hold)
+SELECT
+  h.seg_id, h.icao, h.callsign, h.ac_type, h.apt_icao,
+  'holding' AS kind,
+  h.first_ts AS event_ts,
+  h.mean_dist_nm AS dist_nm, cast(h.mean_alt_ft AS double) AS alt_ft,
+  CASE WHEN td.seg_id IS NOT NULL THEN 1 ELSE 0 END AS landed,
+  concat('racetrack, ', cast(h.n_reports AS string), ' reports, heading spread ',
+         cast(h.heading_spread AS string)) AS detail,
+  least(1.0, h.heading_spread + 0.2) AS confidence
+FROM {S}.gold_holding h
+LEFT JOIN td ON td.seg_id = h.seg_id
+WHERE h.mean_alt_ft >= 6000 AND h.mean_dist_nm BETWEEN 5 AND 60 AND h.n_reports >= 10
+
+UNION ALL
+-- go-around
+SELECT
+  m.seg_id, m.icao, m.callsign, m.ac_type, m.apt_icao,
+  'go_around' AS kind,
+  c.climb_ts AS event_ts,
+  m.min_dist_nm AS dist_nm, m.max_alt_ft AS alt_ft,
+  CASE WHEN td.seg_id IS NOT NULL THEN 1 ELSE 0 END AS landed,
+  'approached < 5 nm then climbed out' AS detail,
+  0.6 AS confidence
+FROM climb c
+JOIN seg_meta m ON m.seg_id = c.seg_id
+LEFT JOIN td ON td.seg_id = c.seg_id
+WHERE td.seg_id IS NULL OR td.td_ts > c.climb_ts + INTERVAL 4 MINUTES
+""",
+    cluster_by="apt_icao, event_ts",
+    time_col="event_ts",
+)
+
+# COMMAND ----------
+# MAGIC %md
 # MAGIC ## Training tables — `full` mode only
 # MAGIC `gold_arrival_tracks` (Model 1) and `gold_demand_15m` (Model 2) are only consumed at
 # MAGIC retrain time. `serving` mode leaves whatever a prior `full` run wrote in place.
@@ -438,7 +544,8 @@ SELECT
 # MAGIC %md ## Validation
 
 # COMMAND ----------
-_tables = ["gold_tracks", "gold_congestion", "gold_holding", "gold_touchdowns", "gold_kpis"]
+_tables = ["gold_tracks", "gold_congestion", "gold_holding", "gold_touchdowns",
+           "gold_irregularities", "gold_kpis"]
 if MODE == "full":
     _tables += ["gold_arrival_tracks", "gold_demand_15m"]
 for t in _tables:

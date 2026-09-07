@@ -132,15 +132,15 @@ stay inside the allowance.
 
 This is the architecture story: two models, two ML shapes, each earning its place.
 
-### Model 3 — Irregularity early-warning  · *documented now, built later*
+### Model 3 — Irregularity early-warning  · *rule-based now; learned model deferred*
 
 | | |
 |---|---|
-| **Question** | Is this flight likely to hold, go around, divert, or squawk an emergency in the next few minutes? |
-| **ML shape** | Short-horizon classification (multi-label or one-vs-rest). |
-| **Labels** | Self-generated: holding = racetrack geometry near the airport; go-around = low-altitude approach followed by climb-out and re-approach; diversion = arrival airport changes mid-approach; emergency = `squawk ∈ {7500,7600,7700}` or `emergency` field set. |
-| **Challenge** | Emergencies are rare (a handful/day globally) → severe class imbalance. Mitigate by folding in the commoner irregularities (holding, go-around) and reporting precision/recall per class, not accuracy. |
-| **Where it lives** | A second panel in the App and the dashboard, and the agreed *second use case* for the portfolio. |
+| **Question** | Is this flight holding, going around, or squawking an emergency right now? |
+| **Shape** | Rules over the trajectory (per completed segment and per live snapshot). *Not a learned classifier* — the archive has 4 emergency aircraft, 25 real holds and ~0 clean go-arounds across 9 days (§7), 10–40× short of what one-vs-rest needs. |
+| **Signals** | holding = racetrack geometry (circular-variance heading spread) at altitude, 5–60 nm out; go-around = descending on-approach report then climb-out with no touchdown; emergency = `squawk ∈ {7500,7600,7700}` or `emergency` field. Diversion dropped — no clean signal at one-airport scope. |
+| **Where it lives** | `gold_irregularities` (history) + `irregularity_flags` (live) → a panel in the App and the dashboard. The agreed *second use case*. |
+| **Learned version** | Phase 6, once continuous live collection has built the labelled event volume. |
 
 ---
 
@@ -511,6 +511,25 @@ drops `chronos-forecasting` for a climatology champion. Same backtest, same numb
 MASE 0.790); v2 verified to load and score on a `scipy`-only env — `score_demand.py` produced
 byte-identical output to the v1 run (2026-09-01 12:00 Z: arrivals-so-far 270, mean 20.0).
 
+### Model 3 — irregularity early-warning (rule-based, 2026-09-07)
+
+**Probed the label volume before building; it's the wrong shape for a trained classifier.**
+Across the 9 archive days:
+
+| irregularity | usable labels | why |
+|---|---|---|
+| emergency (`squawk ∈ {7500,7600,7700}` / `emergency` field) | **4 aircraft** | genuinely rare — always a rule flag |
+| holding (`gold_holding` filtered to plausible flow-control holds: alt ≥ 6000 ft, 5–60 nm, ≥ 10 reports) | **25 segments** | 841 of 866 raw `gold_holding` rows are low-altitude GA pattern-work / military orbits near satellite fields |
+| go-around | ~0 cleanly labelled | at 180 s cadence a go-around's low point is 0–1 reports; departures climb out through the same funnel. Refined rule (descending on-approach report → later climb-out, no touchdown): **346** climb-outs found, **all 346 had a touchdown within 4 min** → not real go-arounds |
+| diversion | no clean signal | ~12k "inbound then left" segments, dominated by overflights never bound for KATL |
+
+A LightGBM classifier needs hundreds–thousands of positives per class; we have 25 / 4 / ~0.
+So **Model 3 ships as rules**, not a learned model — the honest call, same pattern as the
+Chronos fine-tune deferral. `gold_irregularities` (per completed segment, in `build_gold.py`)
+and `src/score_irregularities.py` → `skywatch.stream.irregularity_flags` (live, per
+currently-airborne aircraft) implement `emergency` / `holding` / `go_around` rules. The learned
+Model 3 is a Phase-6 item gated on continuous live collection providing the event volume.
+
 ### Combined product metric
 
 End-to-end: MAE of the **stitched demand curve** (M1 aggregate + M2) against actuals, and
@@ -654,12 +673,20 @@ Each phase is independently demoable.
 - **Platform surface:** Databricks Apps, SQL warehouse connectivity, service-principal auth, secrets.
 
 ### Phase 5 — Model 3: irregularity early-warning  *(second use case)*
-- Label holding / go-around / diversion / emergency from tracks.
-- One-vs-rest classifiers; precision/recall per class; register + score.
-- App + **[Genie Code]** dashboard irregularity panel.
+- ✅ **Rule-based (2026-09-07).** Probed the label volume first — 4 emergency aircraft, 25 real
+  holds, ~0 cleanly-labelled go-arounds across 9 days (§7) — an order of magnitude below
+  classifier scale, so shipped as rules, not a learned model.
+- ✅ `gold_irregularities` (per completed segment, `build_gold.py`): `emergency` (squawk /
+  emergency field), `holding` (plausible flow-control hold from `gold_holding`), `go_around`
+  (descending on-approach → climb-out, no touchdown — coded, ≈ 0 in the archive).
+- ✅ `src/score_irregularities.py` / `skywatch_score_irregularities` → `irregularity_flags`
+  (live, per currently-airborne aircraft; no model load). App panel + Genie dashboard panel.
+- ⏳ Learned Model 3 (one-vs-rest, precision/recall per class) → **Phase 6**, gated on continuous
+  live collection providing the event volume.
 
 ### Phase 6 — Production hardening
 - Move to a paid workspace: real Model Serving endpoints + inference tables, online feature tables, continuous streaming, Lakehouse Monitoring.
+- Learned Model 3 once continuous collection has built the labelled event volume.
 - LLM ops-briefing (Foundation Model API or Mosaic AI Model Training).
 - Full CI/CD, tests, alerting, cost controls.
 

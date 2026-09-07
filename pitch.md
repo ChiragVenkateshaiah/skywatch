@@ -73,6 +73,26 @@ so a coordinator can start metering before holding becomes necessary.
 
 ---
 
+## Model 3 — Irregularity early-warning (rules, not a learned model — on purpose)
+
+**The question:** *Is this flight holding, going around, or squawking an emergency right now?*
+
+The plan was a third trained classifier. Before building it I measured the labelled event
+volume in the data: **4 emergency aircraft, ~25 real holding patterns, and effectively zero
+cleanly-labelled go-arounds** across the 9 collected days. A classifier needs hundreds to
+thousands of examples per class. Forcing a model onto 25 examples produces something that looks
+impressive in a README and fails in practice.
+
+So Model 3 ships as **geometry and squawk rules** — racetrack detection (circular variance of
+heading), emergency transponder codes, descend-then-climb-out patterns — feeding both a
+historical register (`gold_irregularities`) and a live per-aircraft flag stream
+(`irregularity_flags`). The learned version is a documented next step, gated on collecting
+enough continuous live data to support it.
+
+That decision — *try the sophisticated approach, measure, ship the honest one* — is the same
+judgement call as choosing plain climatology over the fine-tuned foundation model in Model 2.
+It's a feature of the project, not a gap.
+
 ## How they work together
 
 They cover different parts of the same timeline:

@@ -49,6 +49,12 @@ state" vs. "predict a quantity's future from its history" — with different dat
 algorithms, and metrics. Both are served to a coordinator through a Streamlit **Databricks App**
 that reads the batch-scored predictions from Delta (Free Edition has no model-serving endpoints).
 
+A third strand — **Model 3, irregularity early-warning** (holding / go-around / emergency) —
+ships as **geometry + squawk rules rather than a learned classifier**: measuring the data first
+showed only ~25 real holds and 4 emergencies across the collected days, far below classifier
+scale. The learned version is a documented next step. Deciding that on evidence rather than
+building a weak model is itself part of the story — see [`pitch.md`](pitch.md).
+
 ---
 
 ## Data source
