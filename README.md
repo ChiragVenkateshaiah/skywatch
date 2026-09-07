@@ -31,8 +31,8 @@ SkyWatch turns that free stream into an **Arrival Manager** built on two models:
 | **Question** | For *this* aircraft, right now, how many minutes until it lands at KATL? | How many aircraft will land in each future 15-minute bin, out to +3 h? |
 | **ML shape** | Tabular **regression** — one row per position report | Univariate **time-series forecast** — one value per 15-min bin |
 | **Label** | `minutes_to_touchdown`, self-supervised from detected landings on historical trajectories | count of landings per bin (same detection, aggregated) |
-| **Algorithm** | LightGBM + Hyperopt, ~111k reports / 9 days | bake-off (seasonal-naive, AutoETS/ARIMA, Chronos-Bolt); **climatological mean** won |
-| **Result** | **MAE ≈ 1.3 min** vs a 5.9 min "distance ÷ speed" baseline (~79% better) | **MASE 0.79** — beats seasonal-naive by 21%, the foundation model by 44% |
+| **Algorithm** | LightGBM + Hyperopt, ~480k reports / 24 days | bake-off (seasonal-naive, AutoETS/ARIMA, Chronos-Bolt); **climatological mean** won |
+| **Result** | **MAE ≈ 1.14 min** vs a 5.9 min "distance ÷ speed" baseline (~80% better) | **MASE 0.79** — beats seasonal-naive, and zero-shot Chronos by ~50% |
 | **Powers** | the **predicted arrival sequence** (landing order + timing) | the **demand curve + surge alerts** vs the Airport Acceptance Rate |
 
 **How they combine:** Model 1's per-flight ETAs cover **0–45 min out** (real airborne aircraft,
@@ -50,10 +50,12 @@ algorithms, and metrics. Both are served to a coordinator through a Streamlit **
 that reads the batch-scored predictions from Delta (Free Edition has no model-serving endpoints).
 
 A third strand — **Model 3, irregularity early-warning** (holding / go-around / emergency) —
-ships as **geometry + squawk rules rather than a learned classifier**: measuring the data first
-showed only ~25 real holds and 4 emergencies across the collected days, far below classifier
-scale. The learned version is a documented next step. Deciding that on evidence rather than
-building a weak model is itself part of the story — see [`pitch.md`](pitch.md).
+ships as **geometry + squawk rules rather than a learned classifier**. Two rounds of
+investigation (9 days, then 24 days at a finer sampling rate) showed the same thing: of 159
+detected "holds", **zero** were aircraft that then landed — all persistent loiterers. KATL
+doesn't hold arrivals in clear weather, and clear-weather days are all the archive has. Deciding
+that on evidence rather than shipping a weak model is itself part of the story — see
+[`pitch.md`](pitch.md).
 
 ---
 

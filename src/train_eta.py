@@ -74,8 +74,10 @@ sdf = add_eta_features(
     spark.table(f"{STREAM}.gold_arrival_tracks")
     .join(confirmed_segs, "seg_id")
     .where(F.col(TARGET).between(0.5, 40))
-    .where(F.col("dist_to_apt_nm").isNotNull() & F.col("gs_kt").isNotNull()
-           & F.col("alt_ft").isNotNull())
+    .where(F.col("dist_to_apt_nm").isNotNull() & F.col("alt_ft").isNotNull())
+    # gs_kt > 60: an aircraft 0.5-40 min from touchdown is always moving fast; a 0 / near-0
+    # groundspeed is a bad fix (or a hovering rotorcraft) and would divide-by-zero the baseline.
+    .where(F.col("gs_kt") > 60)
     .withColumn("obs_date", F.to_date("snapshot_ts"))
 ).withColumn("baseline_pred", F.col("dist_to_apt_nm") / F.col("gs_kt") * 60)
 
