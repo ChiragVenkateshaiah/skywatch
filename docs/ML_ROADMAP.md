@@ -601,6 +601,11 @@ evening?", "average approach delay by hour last week?".
 
 ## 11. Monitoring & MLOps
 
+> **Executable plan:** [`docs/MLOPS_PLAN.md`](MLOPS_PLAN.md) — eight tracks (tests, CI,
+> environments, promotion gate, monitoring, retraining, releases, runbooks), division of labour,
+> and the Free-Edition substitutions. Scheduled after Model 3 is trained and the LinkedIn
+> video/post are out.
+
 | Concern | Production | Free Edition |
 |---|---|---|
 | Feature / prediction drift | Lakehouse Monitoring on inference tables | Scheduled notebook computing PSI / KS on feature distributions and predicted-vs-actual error, written to a `model_health` Delta table + dashboard tile |
@@ -685,10 +690,13 @@ Each phase is independently demoable.
   live collection providing the event volume.
 
 ### Phase 6 — Production hardening
+- **MLOps (Free-Edition-practiceable slice) — planned in [`docs/MLOPS_PLAN.md`](MLOPS_PLAN.md):**
+  test harness, GitHub Actions CI, dev/staging/prod catalog isolation, an automated promotion
+  gate with human approval, DIY drift/performance monitoring, retraining automation, tagged
+  releases + rollback, runbooks. Starts after Model 3 is trained and the LinkedIn video/post ship.
 - Move to a paid workspace: real Model Serving endpoints + inference tables, online feature tables, continuous streaming, Lakehouse Monitoring.
 - Learned Model 3 once continuous collection has built the labelled event volume.
 - LLM ops-briefing (Foundation Model API or Mosaic AI Model Training).
-- Full CI/CD, tests, alerting, cost controls.
 
 ---
 
