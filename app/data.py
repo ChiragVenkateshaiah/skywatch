@@ -84,6 +84,20 @@ def latest_demand_forecast() -> pd.DataFrame:
     )
 
 
+def latest_irregularity_flags(apt_icao: str) -> pd.DataFrame:
+    """Model 3 (rule-based) — aircraft flagged holding / go-around / emergency in the last run."""
+    return query(
+        f"""
+        SELECT kind, severity, callsign, ac_type, icao,
+               dist_to_apt_nm, alt_ft, gs_kt, detail, snapshot_ts, scored_at
+        FROM irregularity_flags
+        WHERE apt_icao = '{apt_icao}'
+          AND scored_at = (SELECT max(scored_at) FROM irregularity_flags WHERE apt_icao = '{apt_icao}')
+        ORDER BY severity DESC, dist_to_apt_nm
+        """
+    )
+
+
 def historical_hourly_profile(apt_icao: str) -> pd.DataFrame:
     """Mean arrivals per 15-min bin by UTC hour, across every collected day."""
     return query(

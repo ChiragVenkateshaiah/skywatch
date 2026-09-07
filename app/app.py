@@ -48,6 +48,15 @@ def load():
     )
 
 
+@st.cache_data(ttl=60)
+def load_flags():
+    # Model 3 is optional — the table may not exist until score_irregularities has run once.
+    try:
+        return data.latest_irregularity_flags(APT_ICAO)
+    except Exception:
+        return pd.DataFrame()
+
+
 # --------------------------------------------------------------------------- header
 left, right = st.columns([0.75, 0.25])
 with left:
@@ -176,7 +185,26 @@ else:
         height=min(560, 44 + 35 * len(seq)),
     )
 
+st.divider()
+
+
+# ---------------------------------------------------------------------- irregularities
+st.subheader("Irregularity flags — Model 3 (rules)")
+flags = load_flags()
+_ICON = {"emergency": "🚨", "go_around": "🔴", "holding": "🟠"}
+if flags.empty:
+    st.info("No aircraft flagged in the latest run. (Rule-based: emergency squawk, go-around, or "
+            "racetrack geometry — no learned model, see the roadmap for why.)")
+else:
+    for _, r in flags.iterrows():
+        icon = _ICON.get(r["kind"], "⚪")
+        line = (f"{icon}  **{r['callsign'] or r['icao']}** ({r['ac_type'] or '?'}) — "
+                f"**{r['kind'].replace('_', ' ')}** · {r['dist_to_apt_nm']:.0f} nm, "
+                f"{r['alt_ft']:.0f} ft · {r['detail']}")
+        (st.error if r["severity"] >= 3 else st.warning)(line)
+
 st.caption(
     f"Data: adsb.lol (ODbL) · {APT_ICAO} · Model 1 `eta_touchdown@champion`, "
-    f"Model 2 `demand_forecast@champion` · batch-scored to Delta (no live endpoint on Free Edition)"
+    f"Model 2 `demand_forecast@champion`, Model 3 rule-based · batch-scored to Delta "
+    f"(no live endpoint on Free Edition)"
 )
