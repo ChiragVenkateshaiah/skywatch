@@ -33,8 +33,8 @@ KATL?*
 | **Inputs** | distance to the airport, groundspeed, altitude, vertical speed, how directly it's pointed at the field, how fast the gap is closing, flight phase (climb/descent/cruise), time of day, and how many other aircraft are inbound (congestion) |
 | **What it predicts** | `minutes_to_touchdown` |
 | **How it learned** | **Self-supervised.** We watch complete historical trajectories, detect the actual landing (aircraft drops below ~3 nm, near field elevation, low speed), then label every earlier report on that flight with "time from here to that landing." No human labeling. |
-| **Algorithm** | LightGBM (gradient-boosted trees), tuned with Hyperopt, trained on ~111k reports / ~8,800 arrivals over 9 days |
-| **How good** | **MAE ≈ 1.3 minutes.** The naive "distance ÷ speed" estimate is off by ~5.9 min — so the model is **~79% better**. Sharpest close in (~1 min inside 20 nm), looser far out. |
+| **Algorithm** | LightGBM (gradient-boosted trees), tuned with Hyperopt, trained on ~480k reports / ~25,000 arrivals over 24 days |
+| **How good** | **MAE ≈ 1.14 minutes.** The naive "distance ÷ speed" estimate is off by ~5.9 min — so the model is **~80% better**. Sharpest close in (~1 min inside 20 nm), looser far out. |
 
 **What it powers in the app:** the **predicted arrival sequence** — rank every inbound aircraft
 by its predicted touchdown time and you have the landing order and timing. Ground handlers, gate
@@ -61,10 +61,11 @@ Free Edition compute limits.
 | **How good** | **MASE 0.79** (below 1.0 means it beats the standard seasonal benchmark) |
 
 **Honest note for the story:** the *intended* centerpiece was fine-tuning the Chronos foundation
-model. With only 9 days of data, plain climatology won — a fine-tune needs more history to be
-worth it. That's a documented decision to revisit once we've collected ~2+ weeks. It's a good
-talking point: *you try the fancy thing, you measure, and you ship the simple thing that
-actually wins.*
+model. Plain climatology won — and stayed winning after the data grew to 24 days / 120 backtest
+windows, where zero-shot Chronos was still the *worst* candidate (~86% worse than climatology).
+A within-day forecast — infer a day's shape from a partial day — isn't what a time-series
+foundation model is good at. It's a good talking point: *you try the fancy thing, you measure,
+and you ship the simple thing that actually wins.*
 
 **What it powers in the app:** the **demand curve** and **surge alerts** — overlay the forecast
 against the **Airport Acceptance Rate** (how many landings the runway configuration can absorb).
@@ -77,17 +78,22 @@ so a coordinator can start metering before holding becomes necessary.
 
 **The question:** *Is this flight holding, going around, or squawking an emergency right now?*
 
-The plan was a third trained classifier. Before building it I measured the labelled event
-volume in the data: **4 emergency aircraft, ~25 real holding patterns, and effectively zero
-cleanly-labelled go-arounds** across the 9 collected days. A classifier needs hundreds to
-thousands of examples per class. Forcing a model onto 25 examples produces something that looks
-impressive in a README and fails in practice.
+The plan was a third trained classifier. Two rounds of investigation said no.
 
-So Model 3 ships as **geometry and squawk rules** — racetrack detection (circular variance of
-heading), emergency transponder codes, descend-then-climb-out patterns — feeding both a
-historical register (`gold_irregularities`) and a live per-aircraft flag stream
-(`irregularity_flags`). The learned version is a documented next step, gated on collecting
-enough continuous live data to support it.
+**Round 1 (9 days):** measured the labelled event volume — 4 emergency aircraft, ~25 plausible
+holding patterns, ~0 cleanly-labelled go-arounds. Far below classifier scale.
+
+**Round 2:** so I 2.5×'d the data — 24 days at a finer sampling rate — *specifically* to get
+enough holding labels. Raw holding detections went 25 → 159. But when I checked whether each
+"hold" was actually an aircraft that then landed at the airport: **zero of 159**. Every one was
+a persistent loiterer — the same few aircraft orbiting near the field over and over (survey,
+traffic-watch, patrol), never landing. The real thing — arrival holding stacks — barely happens
+at Atlanta in clear weather, and clear-weather days are all the historical archive has.
+
+So Model 3 ships as **geometry and squawk rules** — racetrack detection, emergency transponder
+codes, descend-then-climb-out patterns — feeding a historical register (`gold_irregularities`)
+and a live per-aircraft flag stream (`irregularity_flags`). The training code is written and
+ready; it stays dormant until the data contains real arrival holds.
 
 That decision — *try the sophisticated approach, measure, ship the honest one* — is the same
 judgement call as choosing plain climatology over the fine-tuned foundation model in Model 2.

@@ -413,7 +413,14 @@ correctness + skew arguments carry it even at flat MAE.
 |---|---|---|---|---|
 | v4 | closure_kt fix, 9 days, all touchdowns | 1.232 | 1.05 | 1.48 |
 | v5 | + widened detector, all touchdowns | 1.326 | 1.28 | 1.44 |
-| **v6** | + confirmed-only filter | **1.266** | **1.01** | 1.59 |
+| v6 | + confirmed-only filter | 1.266 | 1.01 | 1.59 |
+| **v7** | **+ 24 days at 60 s cadence** (480 k rows / 25 k arrivals, 4.3×) | **1.144** | — | — |
+
+**v7 (2026-09-07)** — retrained after the backfill expansion (9 → 24 days, all new days at 60 s
+cadence). Held-out test MAE **1.144** on 2026-09-01, **~10 % better than v6** purely from more
+data. Auto-promoted to `@champion`. (One fix landed with it: `gs_kt = 0` rows — bad fixes /
+rotorcraft, absent from the 9-day set — divide-by-zero'd the `dist / gs` baseline; `train_eta.py`
+now filters `gs_kt > 60`.)
 
 #### Gold build — incremental / two-mode (PR 4, 2026-09-07)
 
@@ -511,24 +518,48 @@ drops `chronos-forecasting` for a climatology champion. Same backtest, same numb
 MASE 0.790); v2 verified to load and score on a `scipy`-only env — `score_demand.py` produced
 byte-identical output to the v1 run (2026-09-01 12:00 Z: arrivals-so-far 270, mean 20.0).
 
+**v3 — 24 days, decision confirmed (2026-09-07).** Retrained on the 24-day / 120-window
+backtest. `climatological_mean` **still wins** — MAE 2.93, MASE 0.786 (unchanged from 9 days),
+and **zero-shot Chronos is still the *worst* candidate** (MAE 5.46, ~86 % worse than
+climatology). We're now past the ≥14-day fine-tune threshold, but the zero-shot gap is so large
+that a fine-tune is very unlikely to cross over — a within-day forecast (predict a day's shape
+from a partial-day context) is not what a time-series foundation model is good at. Fine-tune
+**deferred as unlikely to pay off**; revisit only if the use case changes (e.g. continuous
+multi-day data where Chronos' autoregressive strength applies).
+
 ### Model 3 — irregularity early-warning (rule-based, 2026-09-07)
 
-**Probed the label volume before building; it's the wrong shape for a trained classifier.**
-Across the 9 archive days:
+**Two rounds of investigation, both said: not a trained classifier.**
+
+**Round 1 — 9 days.** Probed the label volume:
 
 | irregularity | usable labels | why |
 |---|---|---|
 | emergency (`squawk ∈ {7500,7600,7700}` / `emergency` field) | **4 aircraft** | genuinely rare — always a rule flag |
 | holding (`gold_holding` filtered to plausible flow-control holds: alt ≥ 6000 ft, 5–60 nm, ≥ 10 reports) | **25 segments** | 841 of 866 raw `gold_holding` rows are low-altitude GA pattern-work / military orbits near satellite fields |
-| go-around | ~0 cleanly labelled | at 180 s cadence a go-around's low point is 0–1 reports; departures climb out through the same funnel. Refined rule (descending on-approach report → later climb-out, no touchdown): **346** climb-outs found, **all 346 had a touchdown within 4 min** → not real go-arounds |
+| go-around | ~0 cleanly labelled | at 180 s cadence a go-around's low point is 0–1 reports; departures climb out through the same funnel. Refined rule found **346** climb-outs, **all 346 had a touchdown within 4 min** → not real go-arounds |
 | diversion | no clean signal | ~12k "inbound then left" segments, dominated by overflights never bound for KATL |
 
-A LightGBM classifier needs hundreds–thousands of positives per class; we have 25 / 4 / ~0.
-So **Model 3 ships as rules**, not a learned model — the honest call, same pattern as the
-Chronos fine-tune deferral. `gold_irregularities` (per completed segment, in `build_gold.py`)
-and `src/score_irregularities.py` → `skywatch.stream.irregularity_flags` (live, per
-currently-airborne aircraft) implement `emergency` / `holding` / `go_around` rules. The learned
-Model 3 is a Phase-6 item gated on continuous live collection providing the event volume.
+**Round 2 — 24 days at 60 s.** We expanded the backfill (9 → 24 days, 60 s cadence)
+*specifically* to get enough holding labels. Raw "holding" segments went 25 → **159**. But
+linking each to *that same aircraft landing at KATL within 90 minutes*: **0 of 159**. Every
+detected hold is a **persistent loiterer** — the same handful of ICAOs orbiting near KATL
+repeatedly at ~40 nm / 9,000 ft (survey, traffic-watch, law-enforcement, airwork), never
+landing. `train_hold_risk.py` builds this genuine-arrival-hold label and **exits early** with
+`insufficient_positives:0`.
+
+The correct answer for KATL: the archive is the 1st of each month — historically clear-weather
+days — and **KATL does not hold arrivals in good weather**; it absorbs demand with in-trail
+spacing and speed control. Arrival holding stacks form in weather / disruption, which these days
+don't contain. A learned Model 3 needs weather-affected or continuous-collection data.
+
+**What ships:** `gold_irregularities` (per completed segment, in `build_gold.py`) and
+`src/score_irregularities.py` → `skywatch.stream.irregularity_flags` (live, per
+currently-airborne aircraft) implement `emergency` / `holding` / `go_around` **rules**. On the
+24-day set: 8 emergency + 159 holding + 0 go_around segments. `train_hold_risk.py` is kept as
+ready-to-run code (grouped-CV class-weighted LightGBM) that trains only once `min_pos_segs`
+genuine arrival holds exist. The learned Model 3 is a Phase-6 item gated on weather-affected /
+continuous-collection data.
 
 ### Combined product metric
 

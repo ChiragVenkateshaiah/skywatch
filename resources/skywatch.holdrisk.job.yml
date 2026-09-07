@@ -1,0 +1,27 @@
+# SkyWatch — Model 3 hold-risk classifier training.
+# Binary "will this inbound aircraft hold?" on gold_arrival_tracks x gold_irregularities.
+# Serverless, on demand:  databricks bundle run skywatch_train_hold_risk -t dev
+# Re-run after more 60s-cadence backfill lands and Gold is rebuilt (more hold labels).
+
+resources:
+  jobs:
+    skywatch_train_hold_risk:
+      name: skywatch-train-hold-risk
+      max_concurrent_runs: 1
+      timeout_seconds: 3600
+      tags:
+        project: skywatch
+        component: ml
+
+      tasks:
+        - task_key: train
+          notebook_task:
+            notebook_path: ../src/train_hold_risk.py
+            base_parameters:
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              model_name: ${var.catalog}.ml.hold_risk
+              band_nm: ${var.holdrisk_band_nm}
+              test_days: ${var.holdrisk_test_days}
+
+      queue:
+        enabled: true

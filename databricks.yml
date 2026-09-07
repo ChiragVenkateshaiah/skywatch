@@ -153,6 +153,14 @@ variables:
     description: Pin score_demand.py's as-of 15-min bin (0-95) for validation. Blank = current time.
     default: ""
 
+  # --- Model 3: hold-risk classifier (src/train_hold_risk.py) ---
+  holdrisk_band_nm:
+    description: Decision band (min,max nm) — rows this far out are the training/serving population.
+    default: "30,90"
+  holdrisk_test_days:
+    description: Most-recent collection days held out for the Model 3 evaluation.
+    default: "4"
+
 targets:
   dev:
     mode: development
