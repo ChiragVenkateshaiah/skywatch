@@ -296,6 +296,115 @@
         "ORDER BY\n",
         "  horizon_step"
       ]
+    },
+    {
+      "columns": [
+        {
+          "displayName": "total_flagged",
+          "expression": "COUNT(*)"
+        },
+        {
+          "displayName": "emergencies_count",
+          "expression": "SUM(CASE WHEN kind = 'emergency' THEN 1 ELSE 0 END)"
+        },
+        {
+          "displayName": "holding_count",
+          "expression": "SUM(CASE WHEN kind = 'holding' THEN 1 ELSE 0 END)"
+        },
+        {
+          "displayName": "dist_nm",
+          "expression": "ROUND(dist_to_apt_nm, 0)"
+        }
+      ],
+      "displayName": "Latest Irregularity Flags",
+      "name": "irregularity_flags_latest",
+      "queryLines": [
+        "SELECT\n",
+        "  scored_at,\n",
+        "  apt_icao,\n",
+        "  icao,\n",
+        "  callsign,\n",
+        "  ac_type,\n",
+        "  snapshot_ts,\n",
+        "  dist_to_apt_nm,\n",
+        "  alt_ft,\n",
+        "  gs_kt,\n",
+        "  kind,\n",
+        "  severity,\n",
+        "  detail\n",
+        "FROM\n",
+        "  skywatch.stream.irregularity_flags\n",
+        "WHERE\n",
+        "  scored_at\n",
+        "    = (\n",
+        "      SELECT\n",
+        "        MAX(scored_at)\n",
+        "      FROM\n",
+        "        skywatch.stream.irregularity_flags\n",
+        "    )\n",
+        "ORDER BY\n",
+        "  severity DESC,\n",
+        "  dist_to_apt_nm"
+      ]
+    },
+    {
+      "columns": [
+        {
+          "displayName": "dist_nm_rounded",
+          "expression": "ROUND(dist_nm, 1)"
+        }
+      ],
+      "displayName": "Historical Irregularities",
+      "name": "gold_irregularities",
+      "queryLines": [
+        "SELECT\n",
+        "  seg_id,\n",
+        "  icao,\n",
+        "  callsign,\n",
+        "  ac_type,\n",
+        "  apt_icao,\n",
+        "  kind,\n",
+        "  event_ts,\n",
+        "  dist_nm,\n",
+        "  alt_ft,\n",
+        "  landed,\n",
+        "  detail,\n",
+        "  confidence\n",
+        "FROM\n",
+        "  skywatch.stream.gold_irregularities\n",
+        "ORDER BY\n",
+        "  event_ts DESC"
+      ]
+    },
+    {
+      "columns": [
+        {
+          "displayName": "dist_nm_rounded",
+          "expression": "ROUND(dist_nm, 1)"
+        }
+      ],
+      "displayName": "Recent Irregularity Events",
+      "name": "gold_irregularities_recent",
+      "queryLines": [
+        "SELECT\n",
+        "  seg_id,\n",
+        "  icao,\n",
+        "  callsign,\n",
+        "  ac_type,\n",
+        "  apt_icao,\n",
+        "  kind,\n",
+        "  event_ts,\n",
+        "  dist_nm,\n",
+        "  alt_ft,\n",
+        "  landed,\n",
+        "  detail,\n",
+        "  confidence\n",
+        "FROM\n",
+        "  skywatch.stream.gold_irregularities\n",
+        "ORDER BY\n",
+        "  event_ts DESC\n",
+        "LIMIT 25"
+      ]
     }
   ],
   "pages": [
@@ -537,12 +646,12 @@
             "height": 2,
             "width": 12,
             "x": 0,
-            "y": 96
+            "y": 126
           },
           "widget": {
             "multilineTextboxSpec": {
               "lines": [
-                "Data: adsb.lol (ODbL) · KATL (Hartsfield–Jackson) · live poll, 250 nm radius · Model 1 (time-to-touchdown) · Model 2 (15-min arrival demand forecast)"
+                "Data: adsb.lol (ODbL) · KATL (Hartsfield–Jackson) · live poll, 250 nm radius · Model 1 (time-to-touchdown) · Model 2 (15-min arrival demand forecast) · Model 3 (irregularity early-warning, rule-based)"
               ]
             },
             "name": "footer_text"
@@ -1619,7 +1728,7 @@
             "height": 8,
             "width": 12,
             "x": 0,
-            "y": 88
+            "y": 96
           },
           "widget": {
             "name": "table_forecast_detail",
@@ -1748,6 +1857,394 @@
               },
               "version": 3,
               "widgetType": "line"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 2,
+            "width": 12,
+            "x": 0,
+            "y": 104
+          },
+          "widget": {
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Arrival Manager — Model 3 (irregularity early-warning, rule-based)"
+              ]
+            },
+            "name": "header_irregularity"
+          }
+        },
+        {
+          "position": {
+            "height": 4,
+            "width": 4,
+            "x": 0,
+            "y": 106
+          },
+          "widget": {
+            "name": "counter_flagged_now",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "irregularity_flags_latest",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "MEASURE(`total_flagged`)",
+                      "name": "measure(total_flagged)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "data": {
+                "queryName": "main_query"
+              },
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(total_flagged)",
+                  "rowNumber": 0
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Flagged now"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 4,
+            "width": 4,
+            "x": 4,
+            "y": 106
+          },
+          "widget": {
+            "name": "counter_emergencies_now",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "irregularity_flags_latest",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "MEASURE(`emergencies_count`)",
+                      "name": "measure(emergencies_count)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "data": {
+                "queryName": "main_query"
+              },
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(emergencies_count)",
+                  "rowNumber": 0
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Emergencies now"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 4,
+            "width": 4,
+            "x": 8,
+            "y": 106
+          },
+          "widget": {
+            "name": "counter_holding_now_m3",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "irregularity_flags_latest",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "MEASURE(`holding_count`)",
+                      "name": "measure(holding_count)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "data": {
+                "queryName": "main_query"
+              },
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(holding_count)",
+                  "rowNumber": 0
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Holding now"
+              },
+              "version": 2,
+              "widgetType": "counter"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 8,
+            "width": 12,
+            "x": 0,
+            "y": 110
+          },
+          "widget": {
+            "name": "table_flagged_aircraft",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "irregularity_flags_latest",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "expression": "`kind`",
+                      "name": "kind"
+                    },
+                    {
+                      "expression": "`severity`",
+                      "name": "severity"
+                    },
+                    {
+                      "expression": "`callsign`",
+                      "name": "callsign"
+                    },
+                    {
+                      "expression": "`ac_type`",
+                      "name": "ac_type"
+                    },
+                    {
+                      "expression": "`dist_nm`",
+                      "name": "dist_nm"
+                    },
+                    {
+                      "expression": "`alt_ft`",
+                      "name": "alt_ft"
+                    },
+                    {
+                      "expression": "`detail`",
+                      "name": "detail"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "data": {
+                "queryName": "main_query"
+              },
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "kind"
+                  },
+                  {
+                    "fieldName": "severity"
+                  },
+                  {
+                    "fieldName": "callsign"
+                  },
+                  {
+                    "fieldName": "ac_type"
+                  },
+                  {
+                    "fieldName": "dist_nm"
+                  },
+                  {
+                    "fieldName": "alt_ft"
+                  },
+                  {
+                    "fieldName": "detail"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Currently flagged aircraft"
+              },
+              "version": 2,
+              "widgetType": "table"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 8,
+            "width": 6,
+            "x": 0,
+            "y": 118
+          },
+          "widget": {
+            "name": "bar_irregularity_history",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "gold_irregularities",
+                  "disaggregated": false,
+                  "fields": [
+                    {
+                      "expression": "`kind`",
+                      "name": "kind"
+                    },
+                    {
+                      "expression": "COUNT(`icao`)",
+                      "name": "count(icao)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "data": {
+                "queryName": "main_query"
+              },
+              "encodings": {
+                "color": {
+                  "fieldName": "kind",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "x": {
+                  "fieldName": "kind",
+                  "scale": {
+                    "type": "categorical"
+                  }
+                },
+                "y": {
+                  "fieldName": "count(icao)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Irregularity events detected — all collected days"
+              },
+              "version": 3,
+              "widgetType": "bar"
+            }
+          }
+        },
+        {
+          "position": {
+            "height": 8,
+            "width": 6,
+            "x": 6,
+            "y": 118
+          },
+          "widget": {
+            "name": "table_irregularity_log",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "gold_irregularities_recent",
+                  "disaggregated": true,
+                  "fields": [
+                    {
+                      "expression": "`event_ts`",
+                      "name": "event_ts"
+                    },
+                    {
+                      "expression": "`kind`",
+                      "name": "kind"
+                    },
+                    {
+                      "expression": "`callsign`",
+                      "name": "callsign"
+                    },
+                    {
+                      "expression": "`ac_type`",
+                      "name": "ac_type"
+                    },
+                    {
+                      "expression": "`dist_nm_rounded`",
+                      "name": "dist_nm_rounded"
+                    },
+                    {
+                      "expression": "`alt_ft`",
+                      "name": "alt_ft"
+                    },
+                    {
+                      "expression": "`landed`",
+                      "name": "landed"
+                    },
+                    {
+                      "expression": "`detail`",
+                      "name": "detail"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "data": {
+                "queryName": "main_query"
+              },
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "event_ts"
+                  },
+                  {
+                    "fieldName": "kind"
+                  },
+                  {
+                    "fieldName": "callsign"
+                  },
+                  {
+                    "fieldName": "ac_type"
+                  },
+                  {
+                    "fieldName": "dist_nm_rounded"
+                  },
+                  {
+                    "fieldName": "alt_ft"
+                  },
+                  {
+                    "fieldName": "landed"
+                  },
+                  {
+                    "fieldName": "detail"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": {
+                  "fields": [],
+                  "value": "Irregularity event log"
+                }
+              },
+              "version": 2,
+              "widgetType": "table"
             }
           }
         }
