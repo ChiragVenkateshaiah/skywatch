@@ -1,24 +1,27 @@
 # SkyWatch — Arrival Manager (Databricks App, Streamlit).
-# Serves Model 1 (arrival sequence) + Model 2 (3 h demand forecast vs AAR) from the
-# Delta tables the scoring jobs write. Free Edition: max 3 apps, auto-stops 24 h after
-# start/deploy.
+# Serves Model 1 (arrival sequence + live map + click-to-predict), Model 2 (3 h demand
+# forecast vs AAR) and Model 3 (rule-based irregularity flags) from the Delta tables the
+# scoring jobs write. Free Edition: max 3 apps, auto-stops 24 h after start/deploy —
+# `skywatch_app_keepalive` restarts it.
 #
 #   databricks bundle deploy -t dev
 #   databricks bundle run skywatch_arrival_manager -t dev      # (re)start it
 #
-# One-time grant so the app service principal can read the serving tables
-# (run in a SQL editor as metastore admin, sp name shown in the app's page after deploy):
+# One-time grants for the app service principal (SQL editor, as metastore admin; the sp
+# name is on the app's page after deploy):
 #   GRANT USE CATALOG ON CATALOG skywatch TO `<app-service-principal>`;
 #   GRANT USE SCHEMA, SELECT ON SCHEMA skywatch.stream TO `<app-service-principal>`;
+#   GRANT USE SCHEMA ON SCHEMA skywatch.ml TO `<app-service-principal>`;
+#   GRANT EXECUTE ON MODEL skywatch.ml.eta_touchdown TO `<app-service-principal>`;  -- click-to-predict
 
 resources:
   apps:
     skywatch_arrival_manager:
       name: skywatch-arrival-manager
       description: >-
-        SkyWatch Arrival Manager — live predicted arrival sequence (Model 1) and the
-        next-3 h 15-min arrival demand forecast vs the Airport Acceptance Rate (Model 2)
-        for KATL.
+        SkyWatch Arrival Manager for KATL — Model 1 (arrival sequence, live map,
+        in-process click-to-predict), Model 2 (next-3 h demand forecast vs AAR),
+        Model 3 (rule-based irregularity flags).
       source_code_path: ../app
       resources:
         - name: warehouse

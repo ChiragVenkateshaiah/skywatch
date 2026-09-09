@@ -1,0 +1,29 @@
+# SkyWatch — Arrival Manager App keep-alive.
+# Restarts the app if Free Edition auto-stopped it. Serverless.
+#   databricks bundle run skywatch_app_keepalive -t dev
+# Deployed PAUSED — unpause only for a demo window (a running app consumes compute).
+
+resources:
+  jobs:
+    skywatch_app_keepalive:
+      name: skywatch-app-keepalive
+      max_concurrent_runs: 1
+      timeout_seconds: 900
+      tags:
+        project: skywatch
+        component: app
+
+      tasks:
+        - task_key: keepalive
+          notebook_task:
+            notebook_path: ../src/restart_app.py
+            base_parameters:
+              app_name: skywatch-arrival-manager
+
+      schedule:
+        quartz_cron_expression: "0 0 */8 * * ?"   # every 8 h
+        timezone_id: UTC
+        pause_status: ${var.poller_pause_status}
+
+      queue:
+        enabled: true

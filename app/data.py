@@ -56,13 +56,25 @@ def query(sql: str) -> pd.DataFrame:
     return df
 
 
+# the model's 18 features (order matters for pred_contrib); phase is categorical.
+# Keep in sync with src/eta_features.py:ETA_FEATURES / PHASE_CATEGORIES.
+ETA_FEATURES = [
+    "dist_to_apt_nm", "heading_err_deg", "bearing_sin", "bearing_cos", "alt_ft", "gs_kt",
+    "vrate_fpm", "closure_kt", "closure_geom_kt", "turn_rate_dps", "sel_altitude_ft",
+    "airport_inbound_count", "hour_sin", "hour_cos", "dow_sin", "dow_cos", "is_heavy", "phase",
+]
+PHASE_CATEGORIES = ["ground", "climb", "descent", "cruise", "level", "unknown"]
+
+
 def latest_predictions() -> pd.DataFrame:
-    """Most recent Model 1 scoring run — one row per currently-inbound aircraft."""
+    """Most recent Model 1 scoring run — one row per currently-inbound aircraft,
+    with lat/lon (for the map) and the full feature vector (for click-to-predict)."""
+    cols = ("callsign, ac_type, icao, lat, lon, "
+            "predicted_eta_min, predicted_touchdown_ts, snapshot_ts, scored_at, "
+            + ", ".join(ETA_FEATURES))
     return query(
-        """
-        SELECT callsign, ac_type, icao,
-               dist_to_apt_nm, gs_kt, alt_ft,
-               predicted_eta_min, predicted_touchdown_ts, snapshot_ts, scored_at
+        f"""
+        SELECT {cols}
         FROM predictions
         WHERE scored_at = (SELECT max(scored_at) FROM predictions)
         ORDER BY predicted_touchdown_ts
