@@ -18,6 +18,10 @@ env:
     value: stream
   - name: SKYWATCH_APT_ICAO
     value: KATL
+  - name: SKYWATCH_APT_LAT
+    value: "33.6407"
+  - name: SKYWATCH_APT_LON
+    value: "-84.4277"
   # Airport Acceptance Rate (arrivals/hour) — the surge threshold. KATL good-weather ~90.
   - name: SKYWATCH_AAR_PER_HOUR
     value: "90"

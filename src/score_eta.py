@@ -98,7 +98,7 @@ scoring_sdf = add_eta_features(spark.sql(f"""
 # re-list them (duplicate pandas columns break MLflow schema enforcement)
 score_pdf = eta_pandas(
     scoring_sdf.select(
-        "icao", "callsign", "ac_type", "apt_icao", "snapshot_ts", *ETA_FEATURES
+        "icao", "callsign", "ac_type", "apt_icao", "snapshot_ts", "lat", "lon", *ETA_FEATURES
     ).toPandas()
 )
 print(f"{len(score_pdf)} inbound aircraft to score "
@@ -123,10 +123,13 @@ score_pdf["predicted_touchdown_ts"] = (
 score_pdf["model_version"] = MODEL_VERSION
 score_pdf["scored_at"] = dt.datetime.now(dt.timezone.utc)
 
+# write the full feature vector + lat/lon too — the Arrival Manager App reads it for the
+# live map and for in-process "click-to-predict" (re-run the model on a tweaked aircraft).
+score_pdf = score_pdf.copy()
+score_pdf["phase"] = score_pdf["phase"].astype(str)   # Categorical -> str for Spark
 out_cols = [
-    "scored_at", "model_version", "icao", "callsign", "ac_type", "apt_icao",
-    "snapshot_ts", "dist_to_apt_nm", "gs_kt", "alt_ft", "heading_err_deg",
-    "predicted_eta_min", "predicted_touchdown_ts",
+    "scored_at", "model_version", "icao", "callsign", "ac_type", "apt_icao", "snapshot_ts",
+    "lat", "lon", "predicted_eta_min", "predicted_touchdown_ts", *ETA_FEATURES,
 ]
 out = spark.createDataFrame(score_pdf[out_cols])
 (out.write.mode("append").option("mergeSchema", "true")
