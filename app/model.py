@@ -8,16 +8,24 @@ metastore** (`GRANT EXECUTE ON MODEL` / the Grants API both fail with
 
 So instead: `score_eta.py` exports the exact `eta_touchdown@champion` object to a UC
 **Volume** on every scoring run (a plain, always-grantable securable), and this module
-just reads it back with `joblib` — no MLflow registry access needed at all, only
+reads it back with `joblib` — no MLflow registry access needed at all, only
 `READ VOLUME` on `skywatch.ml.models`.
+
+**Databricks Apps don't FUSE-mount Volumes as local paths** (`/Volumes/...` only works
+on cluster / job / notebook compute) — the same reason `data.py` reads Delta tables
+through the SQL Statement Execution API instead of a local Spark session. So this reads
+the Volume file the same way: the **Files REST API** (`WorkspaceClient().files`), not
+`open()`.
 """
 
 from __future__ import annotations
 
+import io
 import json
 import os
 
 import pandas as pd
+from databricks.sdk import WorkspaceClient
 
 from data import ETA_FEATURES, PHASE_CATEGORIES
 
@@ -26,18 +34,22 @@ VOL_DIR = f"/Volumes/{CATALOG}/ml/models"
 MODEL_PATH = f"{VOL_DIR}/eta_touchdown_champion.joblib"
 META_PATH = f"{VOL_DIR}/eta_touchdown_champion.meta.json"
 
+_w = WorkspaceClient()
+
 
 def load_eta_model():
     """The exported champion model + its version string. Raises if the App SP lacks
     `READ VOLUME` on `skywatch.ml.models`, or score_eta.py hasn't run yet."""
     import joblib
 
-    model = joblib.load(MODEL_PATH)
+    model_bytes = _w.files.download(MODEL_PATH).contents.read()
+    model = joblib.load(io.BytesIO(model_bytes))
+
     version = "?"
     try:
-        with open(META_PATH) as f:
-            version = str(json.load(f).get("model_version", "?"))
-    except OSError:
+        meta_bytes = _w.files.download(META_PATH).contents.read()
+        version = str(json.loads(meta_bytes).get("model_version", "?"))
+    except Exception:  # noqa: BLE001 — the version string is cosmetic, never block on it
         pass
     return model, version
 
