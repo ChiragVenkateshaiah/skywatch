@@ -66,6 +66,7 @@ geom AS (
 )
 SELECT current_timestamp() AS scored_at, r.apt_icao, r.icao, r.callsign, r.ac_type,
        r.snapshot_ts, round(r.dist_to_apt_nm, 1) AS dist_to_apt_nm, r.alt_ft, r.gs_kt,
+       r.lat, r.lon,
        'emergency' AS kind, 3 AS severity,
        concat_ws(' ',
          nullif(concat('squawk=', r.squawk), 'squawk='),
@@ -77,6 +78,7 @@ WHERE r.squawk IN ('7500','7600','7700')
 UNION ALL
 SELECT current_timestamp(), r.apt_icao, r.icao, r.callsign, r.ac_type,
        r.snapshot_ts, round(r.dist_to_apt_nm, 1), r.alt_ft, r.gs_kt,
+       r.lat, r.lon,
        'go_around', 3,
        'was low on final in the last window, now climbing away'
 FROM cur_row r JOIN geom g ON g.icao = r.icao
@@ -88,6 +90,7 @@ WHERE g.appr_ts IS NOT NULL
 UNION ALL
 SELECT current_timestamp(), r.apt_icao, r.icao, r.callsign, r.ac_type,
        r.snapshot_ts, round(r.dist_to_apt_nm, 1), r.alt_ft, r.gs_kt,
+       r.lat, r.lon,
        'holding', 2,
        concat('racetrack geometry, heading spread ', cast(g.heading_spread AS string))
 FROM cur_row r JOIN geom g ON g.icao = r.icao

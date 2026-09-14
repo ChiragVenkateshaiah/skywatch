@@ -74,9 +74,19 @@ def load_flags():
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=300)
+def load_flag_history():
+    # gold_irregularities — the archive counts behind the "rules, not a learned model" call.
+    try:
+        return data.historical_irregularity_counts(APT_ICAO)
+    except Exception:
+        return pd.DataFrame()
+
+
 @st.cache_resource
 def load_model():
-    # click-to-predict is optional — needs EXECUTE on the model for the App service principal.
+    # click-to-predict is optional — needs READ VOLUME on skywatch.ml.models and a completed
+    # skywatch_score_eta run (that job writes the model file there).
     try:
         return m1.load_eta_model()
     except Exception as exc:  # noqa: BLE001
@@ -247,8 +257,9 @@ st.divider()
 st.subheader("Click-to-predict — Model 1, in process")
 _model, _mv = load_model()
 if _model is None:
-    st.info(f"Model not loaded (the app service principal needs `EXECUTE` on "
-            f"`{m1.MODEL_NAME}`). Detail: {_mv}")
+    st.info(f"Model not loaded yet — `{m1.MODEL_PATH}` (needs `READ VOLUME` on "
+            f"`{m1.CATALOG}.ml.models`, and a `skywatch_score_eta` run to have written it). "
+            f"Detail: {_mv}")
 elif preds.empty:
     st.info("No inbound aircraft to predict on.")
 else:
@@ -292,6 +303,53 @@ st.divider()
 st.subheader("Irregularity flags — Model 3 (rules)")
 flags = load_flags()
 _ICON = {"emergency": "🚨", "go_around": "🔴", "holding": "🟠"}
+_KIND_COLOUR = {"emergency": [214, 39, 40], "go_around": [239, 85, 59], "holding": [255, 140, 0]}
+_KIND_ORDER = ["emergency", "go_around", "holding"]
+
+col_map, col_hist = st.columns([0.55, 0.45])
+
+with col_map:
+    st.caption("Currently flagged, on the map")
+    fm = flags.dropna(subset=["lat", "lon"]) if not flags.empty else flags
+    if fm.empty:
+        st.info("Nothing flagged right now — that's the common case (rules trip rarely by design).")
+    else:
+        fm = fm.copy()
+        fm["colour"] = fm["kind"].apply(lambda k: _KIND_COLOUR.get(k, [120, 120, 120]))
+        fm["tip"] = (fm["callsign"].fillna(fm["icao"]) + " · " + fm["kind"].str.replace("_", " ")
+                     + " · " + fm["dist_to_apt_nm"].round(0).astype(int).astype(str) + " nm")
+        layers = [
+            pdk.Layer("ScatterplotLayer", data=fm, get_position="[lon, lat]",
+                      get_fill_color="colour", get_radius=2800, pickable=True, opacity=0.9),
+            pdk.Layer("ScatterplotLayer",
+                      data=pd.DataFrame([{"lon": APT_LON, "lat": APT_LAT}]),
+                      get_position="[lon, lat]", get_fill_color="[30,30,30]", get_radius=3000),
+        ]
+        st.pydeck_chart(pdk.Deck(
+            map_style=None,
+            initial_view_state=pdk.ViewState(latitude=APT_LAT, longitude=APT_LON, zoom=7.2),
+            layers=layers, tooltip={"text": "{tip}"},
+        ))
+        st.caption("🚨 emergency · 🔴 go-around · 🟠 holding · black dot = " + APT_ICAO)
+
+with col_hist:
+    st.caption("Historical rate (all collected days)")
+    hist_flags = load_flag_history()
+    hist_map = dict(zip(hist_flags["kind"], hist_flags["n"])) if not hist_flags.empty else {}
+    hchart_df = pd.DataFrame({"kind": _KIND_ORDER, "n": [hist_map.get(k, 0) for k in _KIND_ORDER]})
+    hbar = alt.Chart(hchart_df).mark_bar().encode(
+        x=alt.X("n:Q", title="events"),
+        y=alt.Y("kind:N", title=None, sort=_KIND_ORDER,
+                axis=alt.Axis(labelExpr="replace(datum.label, '_', ' ')")),
+        color=alt.Color("kind:N", scale=alt.Scale(
+            domain=_KIND_ORDER,
+            range=["rgb(214,39,40)", "rgb(239,85,59)", "rgb(255,140,0)"]), legend=None),
+        tooltip=["kind", "n"],
+    ).properties(height=140)
+    st.altair_chart(hbar, use_container_width=True)
+    st.caption("From `gold_irregularities` — why Model 3 is rules, not a learned classifier "
+               "(too few events to train on; see the roadmap).")
+
 if flags.empty:
     st.info("No aircraft flagged in the latest run. (Rule-based: emergency squawk, go-around, or "
             "racetrack geometry — no learned model, see the roadmap for why.)")

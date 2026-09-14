@@ -100,12 +100,25 @@ def latest_irregularity_flags(apt_icao: str) -> pd.DataFrame:
     """Model 3 (rule-based) — aircraft flagged holding / go-around / emergency in the last run."""
     return query(
         f"""
-        SELECT kind, severity, callsign, ac_type, icao,
+        SELECT kind, severity, callsign, ac_type, icao, lat, lon,
                dist_to_apt_nm, alt_ft, gs_kt, detail, snapshot_ts, scored_at
         FROM irregularity_flags
         WHERE apt_icao = '{apt_icao}'
           AND scored_at = (SELECT max(scored_at) FROM irregularity_flags WHERE apt_icao = '{apt_icao}')
         ORDER BY severity DESC, dist_to_apt_nm
+        """
+    )
+
+
+def historical_irregularity_counts(apt_icao: str) -> pd.DataFrame:
+    """`gold_irregularities` counts by kind, across every collected day — the evidence
+    behind Model 3's "rules, not a learned model" call (see roadmap §7)."""
+    return query(
+        f"""
+        SELECT kind, count(*) AS n
+        FROM gold_irregularities
+        WHERE apt_icao = '{apt_icao}'
+        GROUP BY kind
         """
     )
 

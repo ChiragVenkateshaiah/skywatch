@@ -12,7 +12,11 @@
 #   GRANT USE CATALOG ON CATALOG skywatch TO `<app-service-principal>`;
 #   GRANT USE SCHEMA, SELECT ON SCHEMA skywatch.stream TO `<app-service-principal>`;
 #   GRANT USE SCHEMA ON SCHEMA skywatch.ml TO `<app-service-principal>`;
-#   GRANT EXECUTE ON MODEL skywatch.ml.eta_touchdown TO `<app-service-principal>`;  -- click-to-predict
+#   GRANT READ VOLUME ON VOLUME skywatch.ml.models TO `<app-service-principal>`;  -- click-to-predict
+#
+# click-to-predict loads the model from that Volume (src/score_eta.py exports it there every
+# run), not the UC Model Registry — GRANT EXECUTE ON MODEL isn't available on this metastore
+# (confirmed: `REGISTERED_MODEL is not enabled`, both via SQL and the Grants API).
 
 resources:
   apps:

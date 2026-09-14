@@ -11,9 +11,12 @@
 # MAGIC - `predictions` is append-only (`scored_at` per run) so accuracy can be measured later.
 # MAGIC - `predictions_scored` joins past predictions to actual `gold_touchdowns` — the numbers
 # MAGIC   behind the dashboard's accuracy tile.
+# MAGIC - Also exports the champion model to `/Volumes/{catalog}/ml/models/` every run — how the
+# MAGIC   App's click-to-predict panel loads it (see step 1b; UC's per-model `EXECUTE` grant isn't
+# MAGIC   available on this metastore).
 
 # COMMAND ----------
-# MAGIC %pip install -q lightgbm mlflow
+# MAGIC %pip install -q lightgbm mlflow joblib
 # MAGIC %restart_python
 
 # COMMAND ----------
@@ -61,6 +64,35 @@ if sig_cols != ETA_FEATURES:
 # pyfunc wrapper's schema enforcement (signature says string) rejects.
 model = mlflow.lightgbm.load_model(model_uri)
 print(f"loaded v{MODEL_VERSION}; {len(ETA_FEATURES)} features match the model signature")
+
+# COMMAND ----------
+# MAGIC %md
+# MAGIC ## 1b. Export the champion to a Volume — this is how the App's click-to-predict works
+# MAGIC
+# MAGIC The App loads a model in-process for interactive prediction (Free Edition has no serving
+# MAGIC endpoint), which normally means granting its service principal `EXECUTE` on the UC
+# MAGIC registered model. **That grant isn't available on this metastore** —
+# MAGIC `GRANT EXECUTE ON MODEL` and the Grants API both fail with `REGISTERED_MODEL is not
+# MAGIC enabled`, confirmed against the real workspace. A Volume is a plain, always-grantable
+# MAGIC securable, so instead: export the exact model object this run just loaded to a Volume file
+# MAGIC every run, and the App reads it from there (`READ VOLUME`, not a model-registry grant).
+# MAGIC Runs before the early-exit below, so the App's copy stays current even on a quiet burst
+# MAGIC with no aircraft to score.
+
+# COMMAND ----------
+import datetime as _dt
+import json
+
+import joblib
+
+CATALOG = STREAM.split(".")[0]
+spark.sql(f"CREATE VOLUME IF NOT EXISTS {CATALOG}.ml.models")
+VOL_DIR = f"/Volumes/{CATALOG}/ml/models"
+joblib.dump(model, f"{VOL_DIR}/eta_touchdown_champion.joblib")
+with open(f"{VOL_DIR}/eta_touchdown_champion.meta.json", "w") as f:
+    json.dump({"model_name": MODEL_NAME, "model_version": MODEL_VERSION,
+              "exported_at": _dt.datetime.now(_dt.timezone.utc).isoformat()}, f)
+print(f"exported champion v{MODEL_VERSION} -> {VOL_DIR}/eta_touchdown_champion.joblib")
 
 # COMMAND ----------
 # MAGIC %md ## 2. Current inbound aircraft
