@@ -8,21 +8,25 @@ Streamlit app that serves all three models to an arrival coordinator:
 | **Inbound aircraft map** (pydeck) | Model 1 | `predictions` — `lat`/`lon`, coloured by predicted-ETA band |
 | Demand forecast — next 3 h vs AAR + surge alerts | Model 2 | `demand_forecast` (latest `scored_at`), `gold_demand_15m` |
 | Predicted arrival sequence | Model 1 | `predictions` (latest `scored_at`) |
-| **Click-to-predict** | Model 1 | `eta_touchdown@champion` loaded in-process — pick an aircraft, tweak groundspeed/distance, see the re-prediction + per-feature contributions (`pred_contrib`) |
+| **Click-to-predict** | Model 1 | `eta_touchdown@champion`, loaded in-process from a Volume — pick an aircraft, tweak groundspeed/distance, see the re-prediction + per-feature contributions (`pred_contrib`) |
 | Irregularity flags | Model 3 (rules) | `irregularity_flags` (latest `scored_at`) |
 
 Free Edition has no model-serving endpoints, so the panels read Delta tables the batch
 jobs (`skywatch_score_eta`, `skywatch_score_demand`, `skywatch_score_irregularities`)
 write. Data freshness = the scoring cadence (~10 min). Click-to-predict is the one
-exception — it loads the model into the app process and calls it directly.
+exception — it loads the model into the app process and calls it directly, from
+`/Volumes/skywatch/ml/models/eta_touchdown_champion.joblib`, **not** the UC Model
+Registry: `GRANT EXECUTE ON MODEL` isn't available on this metastore
+(`REGISTERED_MODEL is not enabled`, confirmed via both SQL and the Grants API), so
+`score_eta.py` exports the champion to a plain, always-grantable Volume on every run.
 
 ## Files
 
 - `app.py` — the Streamlit UI
 - `data.py` — SQL Statement Execution helpers (app service-principal auth, no PAT) + `ETA_FEATURES`
-- `model.py` — in-process `eta_touchdown@champion` load + `predict_eta` / `contributions`
+- `model.py` — loads the Volume-exported `eta_touchdown@champion` + `predict_eta` / `contributions`
 - `app.yaml` — entry point + env (`SKYWATCH_*`; warehouse id injected from the resource)
-- `requirements.txt` — deps beyond the Apps base image (adds `pydeck`, `mlflow`, `lightgbm`)
+- `requirements.txt` — deps beyond the Apps base image (adds `pydeck`, `joblib`, `lightgbm`)
 
 ## Deploy
 
@@ -40,11 +44,12 @@ metastore admin in a SQL editor:
 GRANT USE CATALOG ON CATALOG skywatch TO `<app-service-principal>`;
 GRANT USE SCHEMA, SELECT ON SCHEMA skywatch.stream TO `<app-service-principal>`;
 GRANT USE SCHEMA ON SCHEMA skywatch.ml TO `<app-service-principal>`;
-GRANT EXECUTE ON MODEL skywatch.ml.eta_touchdown TO `<app-service-principal>`;   -- click-to-predict
+GRANT READ VOLUME ON VOLUME skywatch.ml.models TO `<app-service-principal>`;   -- click-to-predict
 ```
 
-The app degrades gracefully without the last two grants (every panel except click-to-predict
-still works).
+`skywatch.ml.models` is created automatically by the first `skywatch_score_eta` run. The app
+degrades gracefully without the last two grants, or before that first run (every panel except
+click-to-predict still works).
 
 ## Run locally
 

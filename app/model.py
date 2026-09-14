@@ -1,32 +1,45 @@
 """In-process Model 1 load for the App's click-to-predict panel.
 
-Free Edition has no model-serving endpoint, so the App loads `eta_touchdown@champion`
-from the UC registry once at startup and calls it directly. Loading the **raw LightGBM
-model** (`mlflow.lightgbm.load_model`) rather than the pyfunc wrapper keeps the `phase`
-category dtype the model was trained on and gives access to `pred_contrib` (SHAP-style
-per-feature contributions).
+Free Edition has no model-serving endpoint, so click-to-predict needs the model loaded
+directly into the app process. That normally means granting the app's service principal
+`EXECUTE` on the UC registered model — but that grant **isn't available on this
+metastore** (`GRANT EXECUTE ON MODEL` / the Grants API both fail with
+`REGISTERED_MODEL is not enabled`, confirmed against the real workspace).
+
+So instead: `score_eta.py` exports the exact `eta_touchdown@champion` object to a UC
+**Volume** on every scoring run (a plain, always-grantable securable), and this module
+just reads it back with `joblib` — no MLflow registry access needed at all, only
+`READ VOLUME` on `skywatch.ml.models`.
 """
 
 from __future__ import annotations
 
+import json
 import os
 
 import pandas as pd
 
 from data import ETA_FEATURES, PHASE_CATEGORIES
 
-MODEL_NAME = os.environ.get("SKYWATCH_ETA_MODEL", "skywatch.ml.eta_touchdown")
-MODEL_ALIAS = os.environ.get("SKYWATCH_ETA_ALIAS", "champion")
+CATALOG = os.environ.get("SKYWATCH_CATALOG", "skywatch")
+VOL_DIR = f"/Volumes/{CATALOG}/ml/models"
+MODEL_PATH = f"{VOL_DIR}/eta_touchdown_champion.joblib"
+META_PATH = f"{VOL_DIR}/eta_touchdown_champion.meta.json"
 
 
 def load_eta_model():
-    """Raw LightGBM model + its version string. Raises if the App SP lacks EXECUTE."""
-    import mlflow
+    """The exported champion model + its version string. Raises if the App SP lacks
+    `READ VOLUME` on `skywatch.ml.models`, or score_eta.py hasn't run yet."""
+    import joblib
 
-    mlflow.set_registry_uri("databricks-uc")
-    uri = f"models:/{MODEL_NAME}@{MODEL_ALIAS}"
-    version = mlflow.MlflowClient().get_model_version_by_alias(MODEL_NAME, MODEL_ALIAS).version
-    return mlflow.lightgbm.load_model(uri), str(version)
+    model = joblib.load(MODEL_PATH)
+    version = "?"
+    try:
+        with open(META_PATH) as f:
+            version = str(json.load(f).get("model_version", "?"))
+    except OSError:
+        pass
+    return model, version
 
 
 def _frame(row: dict) -> pd.DataFrame:

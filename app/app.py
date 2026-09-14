@@ -76,7 +76,8 @@ def load_flags():
 
 @st.cache_resource
 def load_model():
-    # click-to-predict is optional — needs EXECUTE on the model for the App service principal.
+    # click-to-predict is optional — needs READ VOLUME on skywatch.ml.models and a completed
+    # skywatch_score_eta run (that job writes the model file there).
     try:
         return m1.load_eta_model()
     except Exception as exc:  # noqa: BLE001
@@ -247,8 +248,9 @@ st.divider()
 st.subheader("Click-to-predict — Model 1, in process")
 _model, _mv = load_model()
 if _model is None:
-    st.info(f"Model not loaded (the app service principal needs `EXECUTE` on "
-            f"`{m1.MODEL_NAME}`). Detail: {_mv}")
+    st.info(f"Model not loaded yet — `{m1.MODEL_PATH}` (needs `READ VOLUME` on "
+            f"`{m1.CATALOG}.ml.models`, and a `skywatch_score_eta` run to have written it). "
+            f"Detail: {_mv}")
 elif preds.empty:
     st.info("No inbound aircraft to predict on.")
 else:
