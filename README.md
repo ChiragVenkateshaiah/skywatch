@@ -1,5 +1,10 @@
 # SkyWatch
 
+[![Platform](https://img.shields.io/badge/platform-Databricks%20Free%20Edition-FF3621?style=flat-square&logo=databricks&logoColor=white)](https://www.databricks.com/product/faq/free-edition)
+[![Deploy](https://img.shields.io/badge/deploy-Databricks%20Asset%20Bundle-1B3139?style=flat-square)](databricks.yml)
+[![App](https://img.shields.io/badge/app-Streamlit-FF4B4B?style=flat-square&logo=streamlit&logoColor=white)](app/)
+[![Models](https://img.shields.io/badge/models-LightGBM%20%C2%B7%20Chronos--Bolt%20%C2%B7%20rules-blueviolet?style=flat-square)](pitch.md)
+
 An **Arrival Manager** for a hub airport, built end-to-end on **Databricks Free Edition** for
 the Databricks Builder Launchpad. Turns the free ADS-B transponder stream into per-flight
 touchdown predictions, a 3-hour arrival-demand forecast, and rule-based irregularity flags —
@@ -8,6 +13,16 @@ served to an arrival coordinator through a Databricks App and an AI/BI dashboard
 - **The pitch (no code):** [`pitch.md`](pitch.md)
 - **The full plan + Free Edition ↔ Production capability matrix:** [`docs/ML_ROADMAP.md`](docs/ML_ROADMAP.md)
 - **Production MLOps plan (next arc):** [`docs/MLOPS_PLAN.md`](docs/MLOPS_PLAN.md)
+
+---
+
+## Demo
+
+![SkyWatch Arrival Manager — live map, KPIs, and the 3-hour demand forecast](docs/media/app_demo.gif)
+
+The live map colours inbound aircraft by predicted-ETA band, click-to-predict re-runs Model 1
+in-process on a tweaked aircraft, and the demand curve overlays the 3-hour forecast against the
+Airport Acceptance Rate.
 
 ---
 
@@ -54,43 +69,96 @@ that on evidence rather than shipping a weak model is itself part of the story �
 
 ## Architecture
 
-```
-   live ADS-B (adsb.lol)                 historical (readsb-hist, 1st of each month)
-          │                                        │
-   poller.py  (Trigger.AvailableNow burst)   scripts/backfill_local.py  (off-platform,
-          │  writes JSON to the landing Volume     │  spatial-filtered, then `fs cp` up)
-          ▼                                        ▼
-  ┌──────────────────────  UC Volume: skywatch.core.landing  ──────────────────────┐
-                                        │  Auto Loader (cloudFiles, *.json)
-                                        ▼
-  Lakeflow Declarative Pipeline  (pipeline_medallion.py, serverless, triggered)
-     Bronze  skywatch.stream.bronze_aircraft     raw rows exploded + ingest_ts
-     Silver  skywatch.stream.silver_positions    typed, deduped, kinematics, phase,
-                                                 distance/bearing to airport
-                                        │
-     Gold    build_gold.py  (SQL, two modes: full = rebuild all · serving = last N h via
-                             REPLACE WHERE, liquid-clustered, delta.autoOptimize)
-       gold_tracks · gold_congestion · gold_holding · gold_touchdowns · gold_kpis
-       gold_arrival_tracks (M1 training set) · gold_demand_15m (M2 series)
-       gold_irregularities (M3 rules)
-                                        │
-   ┌────────────────────────────────────┼────────────────────────────────────┐
-   ▼                                    ▼                                    ▼
- train_eta.py / forecast_demand.py    score_eta.py / score_demand.py /     AI/BI dashboard
-   → MLflow + UC Model Registry         score_irregularities.py             (Genie Code authored,
-   skywatch.ml.eta_touchdown@champion   → skywatch.stream.predictions /      captured to src/*.lvdash.json)
-   skywatch.ml.demand_forecast@champion   demand_forecast / irregularity_flags   + Genie space
-                                        │
-                                        ▼
-                        Databricks App  (app/, Streamlit)
-             arrival sequence · live map · click-to-predict (in-process model load)
-             demand curve vs AAR · surge alerts · irregularity flags
+```mermaid
+flowchart TD
+    subgraph SRC[" Data sources "]
+        A1["live ADS-B<br/>adsb.lol"]
+        A2["historical readsb-hist<br/>1st of each month"]
+    end
+
+    subgraph ING[" Ingestion "]
+        B1["poller.py<br/>Trigger.AvailableNow"]
+        B2["backfill_local.py<br/>off-platform, spatial-filtered"]
+    end
+
+    V[("UC Volume<br/>skywatch.core.landing")]
+
+    subgraph MED[" Lakeflow medallion pipeline (serverless, triggered) "]
+        C0["Auto Loader<br/>cloudFiles, *.json"]
+        C1["Bronze<br/>bronze_aircraft"]
+        C2["Silver<br/>silver_positions"]
+        C0 --> C1 --> C2
+    end
+
+    subgraph GOLD[" Gold — build_gold.py (full / serving) "]
+        D1["gold_tracks · congestion · holding<br/>touchdowns · kpis"]
+        D2["gold_arrival_tracks — M1 set"]
+        D3["gold_demand_15m — M2 series"]
+        D4["gold_irregularities — M3 rules"]
+    end
+
+    subgraph TRAIN[" Train + register "]
+        E1["train_eta.py"]
+        E2["forecast_demand.py"]
+    end
+    REG[("UC Model Registry<br/>eta_touchdown@champion<br/>demand_forecast@champion")]
+
+    subgraph SCORE[" Batch scoring (jobs) "]
+        F1["score_eta.py"]
+        F2["score_demand.py"]
+        F3["score_irregularities.py"]
+    end
+
+    subgraph SERVE[" Serving "]
+        G1["AI/BI dashboard<br/>Genie Code authored"]
+        G2["Databricks App<br/>Streamlit"]
+    end
+
+    A1 --> B1
+    A2 --> B2
+    B1 --> V
+    B2 --> V
+    V --> C0
+    C2 --> D1 --> D2
+    D1 --> D3
+    D1 --> D4
+    D2 --> E1
+    D3 --> E2
+    E1 --> REG
+    E2 --> REG
+    D1 --> F1 & F2 & F3
+    REG --> F1
+    REG --> F2
+    F1 --> G1
+    F2 --> G1
+    F3 --> G1
+    F1 --> G2
+    F2 --> G2
+    F3 --> G2
+    REG -. in-process load, click-to-predict .-> G2
+
+    classDef src fill:#dbeafe,stroke:#2563eb,color:#1e293b
+    classDef ingest fill:#fef3c7,stroke:#d97706,color:#1e293b
+    classDef medallion fill:#dcfce7,stroke:#16a34a,color:#1e293b
+    classDef gold fill:#fef9c3,stroke:#ca8a04,color:#1e293b
+    classDef train fill:#fee2e2,stroke:#dc2626,color:#1e293b
+    classDef serve fill:#ede9fe,stroke:#7c3aed,color:#1e293b
+    classDef store fill:#f1f5f9,stroke:#475569,color:#1e293b
+
+    class A1,A2 src
+    class B1,B2 ingest
+    class C0,C1,C2 medallion
+    class D1,D2,D3,D4 gold
+    class E1,E2,F1,F2,F3 train
+    class G1,G2 serve
+    class V,REG store
 ```
 
 **Free Edition has no model-serving endpoints**, so a scheduled job batch-scores the current
 picture to Delta and the dashboard + App read those tables. The App's *click-to-predict* panel
 is the one exception — it loads `eta_touchdown@champion` into the app process and calls it
-directly.
+directly (via a UC Volume export, not the model registry — see [`app/README.md`](app/README.md)
+for why).
 
 ## Repo layout
 
@@ -107,7 +175,7 @@ directly.
 | `scripts/backfill_local.py` | off-platform historical download → `fs cp` to the Volume |
 | `app/` | the Streamlit Databricks App (`app.py`, `data.py`, `model.py`, `app.yaml`) |
 | `resources/*.yml` | Asset Bundle — pipeline, jobs, app, all deployed via DAB |
-| `docs/` | `ML_ROADMAP.md` (the plan), `MLOPS_PLAN.md` (production MLOps arc) |
+| `docs/` | `ML_ROADMAP.md` (the plan), `MLOPS_PLAN.md` (production MLOps arc), `media/` (README demo GIF) |
 
 ## Unity Catalog layout
 
