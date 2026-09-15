@@ -18,7 +18,7 @@ production, retrained on a trigger, released by tag with a rollback path.
 | Experiment tracking | ✅ MLflow + UC registry, `@champion`/`@challenger` | promotion is inline in `train_eta.py`, not a gated step |
 | Versioned pipeline code | ✅ git, feature-branch + PR | no CI — nothing runs on a PR |
 | Batch scoring → Delta | ✅ 3 scoring jobs (`score_eta`, `score_demand`, `score_irregularities`) | deployed PAUSED, no enforced cadence |
-| Testing | ❌ | zero automated tests; notebooks aren't importable |
+| Testing | 🟡 started | 39 pytest tests (geometry, ETA features, demand-forecast lib) — see §6a. `build_gold.py` transforms + CI wiring still open |
 | Environments | ❌ | dev only; `skywatch.stream` referenced across ~6 files |
 | Monitoring | ❌ | `predictions_scored` computes error but nothing watches it; no drift, no freshness, no alerts |
 | Retraining | ❌ manual | no trigger, no schedule, no automation |
@@ -160,14 +160,40 @@ Track 7 / 8. Estimated 2–3 weeks part-time.
 
 ---
 
-## 6. Open items to resolve at kickoff
+## 6. Open items — resolved at kickoff (2026-09-15)
 
-1. **Slack workspace** for model alerts? If yes, an incoming webhook; if no, email for
-   everything.
-2. **M3 classifier scope** — once the 60 s backfill is ingested and we can count events: binary
-   **hold-risk** only, or also attempt a **go-around** class? The ingest decides.
-3. **Prerequisite check** — Model 3 trained ✔, LinkedIn video out ✔, LinkedIn post out ✔ before
-   Track 1 starts.
+1. **Slack workspace?** No. Email for everything, including model-health alerts (Track 5) —
+   the built-in `email_notifications.on_failure` plus a plain SQL Alert notification, no
+   webhook to manage.
+2. **M3 classifier scope** — resolved harder than the question assumed. The 24-day ingest
+   showed **0 of 159** detected holds ever landed (all persistent loiterers; KATL doesn't hold
+   arrivals in clear weather, and clear-weather days are all the archive has). Not "binary vs
+   multiclass" — **no learned classifier at all**. Model 3 stays rule-based permanently
+   (`train_hold_risk.py` stays dormant, kept as ready code per PR #15).
+3. **Prerequisite check** — Model 3 trained ✔, LinkedIn video out ✔, LinkedIn post out ✔.
+   Track 1 started 2026-09-15.
+
+---
+
+## 6a. Progress log
+
+- **2026-09-15 — Track 1 kicked off, first slice merged.** `src/lib/geometry.py`
+  (`haversine_nm` / `initial_bearing_deg` / `angular_diff_deg` — extracted, faithfully, from
+  `pipeline_medallion.py`'s inline versions) + `tests/` (pytest, a local-Spark `conftest.py`
+  fixture, 39 tests covering geometry, `eta_features.py`, `demand_lib.py`). Verified locally
+  (portable JDK 17, no root) before pushing — all 39 pass.
+  - **Deliberately NOT done in this slice:** `pipeline_medallion.py` / `build_gold.py` do
+    **not** yet import from `src/lib/` — they still run their own duplicated copy. `dev` is
+    currently the only bundle target and points at the live `skywatch` catalog (Track 3 not
+    started), so swapping the import in the notebook that feeds the live demo/dashboard
+    wasn't worth the risk without an isolated catalog to test against first. Tracked as a
+    Track 1/Track 3 joint follow-up: migrate the import once a `dev` catalog exists, verify
+    with a real `bundle deploy` + pipeline run there, *then* delete the duplicate.
+  - `eta_features.py` and `demand_lib.py` turned out to already be plain-importable (no
+    `dbutils`/`spark` reference at module level) — tested in place rather than moved into
+    `src/lib/`.
+  - Remaining Track 1 scope: `build_gold.py`'s touchdown-acceptance / `seg_id` logic (a
+    golden-output test against a tiny ADS-B fixture, per §2 Track 1) — not started yet.
 
 ---
 

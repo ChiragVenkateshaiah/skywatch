@@ -1,6 +1,7 @@
 .databricks/
 *.lvdash.json.bak
 __pycache__/
+.pytest_cache/
 .env
 _backfill/
 _backfill_download.log

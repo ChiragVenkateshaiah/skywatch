@@ -1,0 +1,12 @@
+# Local + CI test harness (docs/MLOPS_PLAN.md Track 1 / Track 2). Not deployed to Databricks —
+# the cluster/serverless runtime already has its own pandas/pyspark; this is only for running
+# `pytest` outside Databricks (a laptop, or GitHub Actions).
+#
+# Needs a JDK (11 or 17) on PATH for pyspark — CI installs one via actions/setup-java;
+# locally, https://pypi.org/project/install-jdk/ works without root:
+#   pip install install-jdk && python -c "import jdk; jdk.install('17', jre=False)"
+pytest>=8
+pyspark==3.5.3
+pandas>=2,<3
+numpy>=1.26
+scipy>=1.11
