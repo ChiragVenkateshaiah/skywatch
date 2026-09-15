@@ -26,6 +26,12 @@ LANDING_ROOT = spark.conf.get("skywatch.landing_root", "/Volumes/skywatch/core/l
 
 EARTH_RADIUS_NM = 3440.065
 
+# NOTE: this trio is duplicated (faithfully) at src/lib/geometry.py, which has a pytest suite
+# (tests/test_geometry.py). Not imported from there yet — this file runs inside a live DLT
+# pipeline against the real `skywatch` catalog (no isolated dev catalog until Track 3 of
+# docs/MLOPS_PLAN.md lands), so the import-path switch gets tested against that first rather
+# than risking the live pipeline here. Keep the two in sync until that migration happens.
+
 
 def _cols(*names):
     return tuple(F.col(n) if isinstance(n, str) else n for n in names)
