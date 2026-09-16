@@ -136,6 +136,29 @@ variables:
       Blank = skip the A/B cell. Get it from DESCRIBE HISTORY skywatch.stream.gold_arrival_tracks.
     default: ""
 
+  # --- Model 1 promotion gate (src/promote_eta.py) ---
+  eta_holdout_table_version:
+    description: >-
+      Delta version of gold_arrival_tracks to pin the promotion-gate holdout to (blank =
+      current). Pin this once you know a stable version, so re-running the gate later compares
+      against identical data.
+    default: ""
+  eta_min_improvement_pct:
+    description: Promote if overall MAE improves by at least this percent vs @champion.
+    default: "2.0"
+  eta_noise_band_pct:
+    description: Also promote if within this percent of @champion (not meaningfully worse).
+    default: "1.0"
+  eta_max_band_regression_min:
+    description: Hold if any distance band's MAE gets worse than this many minutes vs @champion.
+    default: "0.15"
+  eta_promote_apply:
+    description: >-
+      "false" = report the gate recommendation only (dry run). "true" = apply it IF the gate
+      passes — this is the human-approval step: re-run with this set only after reading the
+      report from a prior dry run.
+    default: "false"
+
   # --- Model 2: arrival demand forecast (src/forecast_demand.py) ---
   demand_horizon_bins:
     description: Forecast horizon in 15-min bins (12 = 3 h).

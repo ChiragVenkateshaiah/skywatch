@@ -1,0 +1,33 @@
+# SkyWatch (staging) — Model 1 promotion gate.
+# Evaluates @challenger vs @champion on read-only prod holdout data, reports a promote/hold
+# recommendation against staging's OWN registry (skywatch_staging.ml). Never flips @champion
+# on its own — see src/promote_eta.py.
+
+resources:
+  jobs:
+    skywatch_promote_eta_staging:
+      name: skywatch-promote-eta-staging
+      max_concurrent_runs: 1
+      timeout_seconds: 1800
+      tags:
+        project: skywatch
+        component: ml
+        env: staging
+
+      tasks:
+        - task_key: promote
+          notebook_task:
+            notebook_path: ../../src/promote_eta.py
+            base_parameters:
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              read_stream_schema: ${var.read_catalog}.${var.stream_schema}
+              model_name: ${var.catalog}.ml.eta_touchdown
+              test_date: ${var.eta_test_date}
+              holdout_table_version: ${var.eta_holdout_table_version}
+              min_improvement_pct: ${var.eta_min_improvement_pct}
+              noise_band_pct: ${var.eta_noise_band_pct}
+              max_band_regression_min: ${var.eta_max_band_regression_min}
+              apply: ${var.eta_promote_apply}
+
+      queue:
+        enabled: true

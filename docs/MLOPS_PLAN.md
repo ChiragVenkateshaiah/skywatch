@@ -15,7 +15,7 @@ production, retrained on a trigger, released by tag with a rollback path.
 | Capability | Have | Gap |
 |---|---|---|
 | IaC (Asset Bundle) | ✅ all resources bundled | one target (`dev`); no staging/prod |
-| Experiment tracking | ✅ MLflow + UC registry, `@champion`/`@challenger` | promotion is inline in `train_eta.py`, not a gated step |
+| Experiment tracking | ✅ MLflow + UC registry, `@champion`/`@challenger`, gated promotion (M1) | M2's promotion still inline in `forecast_demand.py` — not yet extracted |
 | Versioned pipeline code | ✅ git, feature-branch + PR, CI runs lint/test/validate on every PR | environment gap only — see Environments row |
 | Batch scoring → Delta | ✅ 3 scoring jobs (`score_eta`, `score_demand`, `score_irregularities`) | deployed PAUSED, no enforced cadence |
 | Testing | 🟡 started | 39 pytest tests (geometry, ETA features, demand-forecast lib) — see §6a. `build_gold.py` transforms + CI wiring still open |
@@ -139,14 +139,26 @@ notebooks, and split every `SELECT ... FROM {STREAM}.gold_*` from every
 - First `bundle deploy` of `serving_staging/` (manual, before CI exists to do it).
 
 ### Track 4 — Promotion gate
-Pull alias-setting out of `train_eta.py` into `src/promote_eta.py` + a `skywatch_promote_eta`
-job:
 
-- load `@challenger`, evaluate on a **pinned holdout** (Delta `VERSION AS OF`)
-- compare to `@champion` on the metric contract — M1: MAE by distance band; M2: MASE; gate =
-  "≥ 2 % better or within noise **and** no band regression"
-- move the `@champion` alias **only if** the gate passes **and** a human approves (GitHub
-  deployment approval, or a Databricks job manual task)
+**M1 done, 2026-09-16 — see §6a.** `src/promote_eta.py` + `skywatch_promote_eta` job (dev) /
+`skywatch_promote_eta_staging` (staging):
+
+- load `@challenger`, evaluate on a **pinned holdout** (`gold_arrival_tracks VERSION AS OF`,
+  blank = current) — same day/filters `train_eta.py` uses, so the two are comparable
+- compare to `@champion` (if one exists — bootstrap auto-passes) on MAE **by distance band**,
+  not just the headline number — the gate decision itself is pure Python
+  (`src/lib/promotion.py`, unit-tested) called from the notebook
+- gate = "≥ 2% better or within noise **and** no individual band regression" — both
+  thresholds are bundle vars, not hardcoded
+- **The human-approval mechanism**: the notebook takes an `apply` parameter, default `false`
+  (dry run — reports the recommendation, touches nothing). A passing gate is only ever applied
+  by a second, deliberate run with `apply=true` — that re-trigger, by a human who read the
+  report, *is* the approval. A failing gate is never applied regardless of `apply`. No GitHub
+  Environment / manual-approval-task machinery needed — simpler, and matches what Databricks
+  Jobs actually support today.
+- **M2's promotion gate (MASE-based) is not yet built** — `forecast_demand.py` still
+  auto-promotes inline, same pattern M1 had before this. Fast-follow using the same
+  `evaluate_gate` function once there's a reason to prioritize it.
 
 ### Track 5 — Monitoring (DIY — Lakehouse Monitoring is paid)
 `src/monitor.py` + a **live, low-frequency** `skywatch_monitor` job → `skywatch.ml.model_health`:
@@ -198,7 +210,7 @@ substitute **and** documented as "production swaps X for Y" — itself a portfol
 | 1 Tests | run `pytest` locally, add cases, wire coverage | refactor notebooks → `src/lib/`, write the initial suite + fixtures |
 | 2 CI | author `.github/workflows/*.yml`, create the SP/PAT, set GH Environments + required reviewers + branch protection | exact commands CI runs, auth setup checklist, review your YAML |
 | 3 Environments | create `skywatch_staging` catalog + schemas, create the CI service principal (shared prerequisite with Track 2), the read-only prod grants, first `serving_staging/` deploy | `serving_staging/` second bundle (§3), `read_stream_schema` split across the 5 train/score notebooks |
-| 4 Promotion gate | run the promote job, make the promote/hold call, approve the deployment | `promote_*.py` + metric contract + the gate job |
+| 4 Promotion gate | run `promote_eta` with `apply=true` when you want to act on a passing recommendation (that's the approval — see §2 Track 4) | done for M1 (`promote_eta.py` + gate job, both envs); M2's `promote_demand.py` not started |
 | 5 Monitoring | configure the SQL Alert + notification destination, read the health dashboard, act on a drift signal | `monitor.py` (PSI / rolling-MAE / freshness), schedule, dashboard tile |
 | 6 Retraining | set the schedule, trigger a drift-driven retrain once, review the challenger PR | wire the retrain workflow + the three triggers |
 | 7 Release | cut a tagged release, write a changelog entry, practice one rollback | semver + release-notes convention, tag → prod path, rollback doc |
@@ -347,6 +359,31 @@ the two-bundle split wasn't in the original scope).
     `DATABRICKS_CLIENT_SECRET`) from the `skywatch-ci` SP's own OAuth credentials.
   - **Not done**: any path that deploys to `dev` / the live environment. Deliberately left
     manual — see the Track 2 section above for why.
+
+- **2026-09-16 — Track 4 done (M1).** `train_eta.py` no longer auto-promotes to `@champion`
+  on beating the naive baseline (that was never a real bar) — it now only ever registers
+  `@challenger`. `src/promote_eta.py` + `skywatch_promote_eta` / `_staging` jobs own the actual
+  decision, evaluated by `src/lib/promotion.py::evaluate_gate` (pure Python, 13 pytest cases —
+  bootstrap, clear pass/fail, noise-band boundaries, band-regression-blocks-an-overall-win,
+  missing-band tolerance).
+  - **Verified fully live, not just deployed**: deliberately retrained with `eta_max_evals=3`
+    (undertuned on purpose) to get a genuinely different challenger (v8, MAE 1.154) against the
+    existing tuned champion (v7, MAE 1.144). Dry run (`apply=false`, the deployed default)
+    correctly reported `PASS` (0.87% worse is inside the 1% noise band) and left `@champion`
+    at v7, confirmed via the registry API. Redeployed with `apply=true` baked in (`bundle run
+    --var` does **not** override job parameters — a known gotcha from earlier in this project;
+    only `bundle deploy --var` does), re-ran, confirmed `@champion` actually flipped to v8, then
+    redeployed the safe `apply=false` default back and reverted `@champion` to v7 (v8 was a
+    deliberately undertuned test artifact, not worth keeping as the live model backing
+    click-to-predict — and the README's published MAE number refers to v7).
+  - **Resolves a Track 1 open question**: `from lib.promotion import evaluate_gate` works
+    correctly from a live Databricks Job notebook task (confirmed — the run would have failed
+    with an ImportError otherwise, it didn't). This was previously unverified and cited as the
+    reason `pipeline_medallion.py` / `build_gold.py` weren't migrated to import from `src/lib/`
+    yet. Narrower than it sounds, though: this confirms it for a **Job notebook task**
+    specifically, not a **Lakeflow/DLT pipeline task** (`pipeline_medallion.py`'s case) — DLT
+    may resolve libraries differently. `build_gold.py` (also a plain Job notebook) is now
+    unblocked by this; `pipeline_medallion.py` is not, yet.
 
 ---
 
