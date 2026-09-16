@@ -13,7 +13,7 @@
 resources:
   apps:
     skywatch_arrival_manager_staging:
-      name: skywatch-arrival-manager-staging
+      name: skywatch-arrmgr-staging   # Apps cap names at 30 chars; skywatch-arrival-manager-staging is 32
       description: >-
         SkyWatch Arrival Manager — STAGING. Same app code as production, isolated data
         (skywatch_staging catalog), for exercising the CI/promotion-gate workflow safely.

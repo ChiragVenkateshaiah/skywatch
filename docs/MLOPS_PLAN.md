@@ -289,8 +289,34 @@ the two-bundle split wasn't in the original scope).
     `stream_schema=skywatch_staging.stream` / `model_name=skywatch_staging.ml.eta_touchdown`
     (staging's own), and the App's resolved `config.env` all point at `skywatch_staging`. Not
     deployed — `staging_run_as` has no default on purpose and blocks deploy until real.
-  - **Not started:** the CI service principal and `skywatch_staging` catalog/schemas/grants
-    (your hands-on part) — nothing in `serving_staging/` can actually deploy until those exist.
+  - **Update, same day: staging is live and verified end-to-end.** Created the
+    `skywatch_staging` catalog + `stream`/`ml` schemas, and a service principal
+    (`skywatch-ci`, app id `7bdaf533-8c9c-492c-ba0f-16df4ed969f2`) with an OAuth M2M secret
+    (90-day lifetime) stored as a local `skywatch-ci` CLI profile — granted it read-only on
+    `skywatch.stream`/`skywatch.ml` (prod) and full read-write on `skywatch_staging.*`, per the
+    bundle's own header comment.
+    - Deployed `serving_staging/` authenticated *as* that SP (`--profile skywatch-ci`), not a
+      human passing its ID via `--var` — confirms the `run_as`-must-match-deployer constraint
+      from earlier applies exactly as understood.
+    - Two more issues found only by actually deploying (neither visible from `validate`):
+      (1) `root_path` was still hardcoded to a personal `/Workspace/Users/<human>/` folder from
+      an earlier scratch test — the SP can't write there. Fixed to `/Workspace/Shared/...` +
+      an explicit `permissions: CAN_MANAGE for group_name: users` block (acknowledging the
+      shared-path warning rather than ignoring it — fine on this single-user workspace).
+      (2) Databricks App names cap at 30 characters; `skywatch-arrival-manager-staging` is 32.
+      Renamed to `skywatch-arrmgr-staging` (app resource + the keepalive job's `app_name` param).
+    - **Ran `skywatch_score_irregularities_staging` for real**: TERMINATED SUCCESS, and queried
+      `skywatch_staging.stream.irregularity_flags` (as the SP — as the deploying human I have
+      no grant on it, by design, since the SP owns what it creates) — one fresh row, proving
+      the read-from-prod/write-to-staging split works against real data, not just resolved
+      config.
+    - **Started the App itself**: also needed its own grants — Databricks Apps auto-create a
+      *separate* per-app service principal (distinct from the deploying `run_as` SP), which
+      needed the same catalog/schema grants issued against `skywatch_staging` (run as the
+      catalog owner, not the CI SP — the CI SP has no `MANAGE` privilege to grant on a catalog
+      it doesn't own). Confirmed `RUNNING` / `ACTIVE` via the Apps API.
+    - **Remaining for Track 3 / Track 2**: nothing blocking left for staging itself. Track 2
+      (CI) can now reuse the same `skywatch-ci` SP for GitHub Actions once that track starts.
 
 ---
 

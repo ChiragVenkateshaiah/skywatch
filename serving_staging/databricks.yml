@@ -40,9 +40,6 @@ sync:
   paths:
     - ../src
     - ../app
-  exclude:
-    - "*.md"
-    - ".git/**"
 
 variables:
   # --- Unity Catalog layout — deliberately two different catalogs ---
@@ -134,6 +131,15 @@ targets:
     mode: production
     workspace:
       host: https://dbc-0fadb959-36a9.cloud.databricks.com
-      root_path: /Workspace/Users/chiragvenkatesh92@gmail.com/.bundle/${bundle.name}/${bundle.target}
+      # NOT a personal user folder — this bundle deploys as the CI service principal, which
+      # doesn't have write access under /Workspace/Users/<human>/. A shared path keeps this
+      # correct regardless of which identity ends up running the deploy.
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
     run_as:
       service_principal_name: ${var.staging_run_as}
+    # Free Edition workspace is single-user (the account owner + this one CI SP) — /Workspace/Shared
+    # being readable/writable by "all workspace users" has no realistic blast radius here.
+    # Explicit per the CLI's own suggested fix, rather than silently accepting the default.
+    permissions:
+      - group_name: users
+        level: CAN_MANAGE
