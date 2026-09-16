@@ -1,0 +1,41 @@
+# SkyWatch (staging) — Arrival Manager App (Databricks App, Streamlit).
+# Same app/ source code as the live (dev-target) app — see ../databricks.yml header for why
+# this is a separate bundle/resource rather than the same one. Reads only the serving output
+# tables staging's own scoring jobs write (predictions / demand_forecast / irregularity_flags),
+# under `catalog` — never read_catalog; the App never reads Gold directly.
+#
+# One-time grants for THIS app's service principal (name is on the app's page after deploy):
+#   GRANT USE CATALOG ON CATALOG skywatch_staging TO `<app-service-principal>`;
+#   GRANT USE SCHEMA, SELECT ON SCHEMA skywatch_staging.stream TO `<app-service-principal>`;
+#   GRANT USE SCHEMA ON SCHEMA skywatch_staging.ml TO `<app-service-principal>`;
+#   GRANT READ VOLUME ON VOLUME skywatch_staging.ml.models TO `<app-service-principal>`;
+
+resources:
+  apps:
+    skywatch_arrival_manager_staging:
+      name: skywatch-arrival-manager-staging
+      description: >-
+        SkyWatch Arrival Manager — STAGING. Same app code as production, isolated data
+        (skywatch_staging catalog), for exercising the CI/promotion-gate workflow safely.
+      source_code_path: ../../app
+      resources:
+        - name: warehouse
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+      config:
+        env:
+          - name: SKYWATCH_WAREHOUSE_ID
+            value_from: warehouse
+          - name: SKYWATCH_CATALOG
+            value: ${var.catalog}
+          - name: SKYWATCH_SCHEMA
+            value: ${var.stream_schema}
+          - name: SKYWATCH_APT_ICAO
+            value: ${var.apt_icao}
+          - name: SKYWATCH_APT_LAT
+            value: ${var.apt_lat}
+          - name: SKYWATCH_APT_LON
+            value: ${var.apt_lon}
+          - name: SKYWATCH_AAR_PER_HOUR
+            value: ${var.apt_aar_per_hour}

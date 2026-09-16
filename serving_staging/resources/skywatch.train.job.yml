@@ -1,0 +1,30 @@
+# SkyWatch (staging) — Model 1 training job (time-to-touchdown).
+# Trains on prod's real gold_arrival_tracks (read-only), registers into staging's own
+# skywatch_staging.ml. See ../databricks.yml header for why this is a separate bundle.
+
+resources:
+  jobs:
+    skywatch_train_eta_staging:
+      name: skywatch-train-eta-staging
+      max_concurrent_runs: 1
+      timeout_seconds: 7200
+      tags:
+        project: skywatch
+        component: ml
+        env: staging
+
+      tasks:
+        - task_key: train
+          notebook_task:
+            notebook_path: ../../src/train_eta.py
+            base_parameters:
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              read_stream_schema: ${var.read_catalog}.${var.stream_schema}
+              model_name: ${var.catalog}.ml.eta_touchdown
+              test_date: ${var.eta_test_date}
+              max_evals: ${var.eta_max_evals}
+              run_automl: "false"
+              ab_table_version: ${var.eta_ab_table_version}
+
+      queue:
+        enabled: true

@@ -259,6 +259,39 @@ the two-bundle split wasn't in the original scope).
   - Remaining Track 1 scope: `build_gold.py`'s touchdown-acceptance / `seg_id` logic (a
     golden-output test against a tiny ADS-B fixture, per §2 Track 1) — not started yet.
 
+- **2026-09-16 — Track 3 code done: read/write split + `serving_staging/` bundle skeleton,
+  validated but not deployable yet (needs the SP + catalog, your hands-on part).**
+  - `read_stream_schema` widget added to `score_eta.py`, `score_demand.py`,
+    `score_irregularities.py`, `train_eta.py`, `forecast_demand.py`, **and**
+    `train_hold_risk.py` (dormant, but made consistent while touching the others). Blank
+    default falls back to `stream_schema` — verified live against `dev`
+    (`skywatch_score_irregularities` run, fresh row landed) that this is byte-identical to the
+    old behavior.
+  - `serving_staging/` created: its own `databricks.yml` + `resources/*.yml` (copies of the 6
+    train/score jobs + the App + its keepalive, all resource keys/names `_staging`-suffixed).
+    Two more real DAB constraints surfaced while building it, both resolved:
+    - **Databricks Apps require the deploying identity to equal `run_as` exactly** — this is
+      stricter than jobs (which support true impersonation: deployer ≠ runner). Confirmed by
+      testing: a human deploying with a placeholder SP in `run_as` is rejected outright
+      ("apps do not support a setting a run_as user that is different from the owner");
+      swapping in the human's own matching identity validates fine. **Practical implication**:
+      the first `serving_staging` deploy must genuinely authenticate the CLI *as* the service
+      principal (SP OAuth client-credentials profile), not a human passing the SP's ID via
+      `--var` — revises the "manual first deploy" hands-on step below.
+    - **A bundle's file sync defaults to its own directory and rejects `notebook_path`/
+      `source_code_path` references outside it** ("not contained in sync root path") —
+      `serving_staging/resources/*.yml`'s `../../src/*.py` / `../../app` references need
+      `sync.paths: [../src, ../app]` in `serving_staging/databricks.yml` to be allowed at all.
+      Added; `bundle validate -t staging` now resolves every notebook path and the app's
+      `source_code_path` correctly under `serving_staging`'s own workspace deployment path.
+  - Verified via `bundle validate -t staging --output json`: `score_eta_staging`'s resolved
+    `base_parameters` show `read_stream_schema=skywatch.stream` (prod) and
+    `stream_schema=skywatch_staging.stream` / `model_name=skywatch_staging.ml.eta_touchdown`
+    (staging's own), and the App's resolved `config.env` all point at `skywatch_staging`. Not
+    deployed — `staging_run_as` has no default on purpose and blocks deploy until real.
+  - **Not started:** the CI service principal and `skywatch_staging` catalog/schemas/grants
+    (your hands-on part) — nothing in `serving_staging/` can actually deploy until those exist.
+
 ---
 
 ## 7. Relationship to the roadmap

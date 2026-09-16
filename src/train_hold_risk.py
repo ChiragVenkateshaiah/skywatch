@@ -33,12 +33,15 @@
 # COMMAND ----------
 try:
     dbutils.widgets.text("stream_schema", "skywatch.stream")
+    # blank = same as stream_schema — see the note in score_eta.py / docs/MLOPS_PLAN.md Track 3.
+    dbutils.widgets.text("read_stream_schema", "")
     dbutils.widgets.text("model_name", "skywatch.ml.hold_risk")
     dbutils.widgets.text("band_nm", "30,90")          # decision band: min,max distance
     dbutils.widgets.text("land_within_min", "90")     # hold -> same-icao KATL landing within this
     dbutils.widgets.text("max_same_day_holds", "2")   # icao with more holds/day = loiterer, excluded
     dbutils.widgets.text("min_pos_segs", "40")        # need this many genuine arrival-hold segments to train
     STREAM = dbutils.widgets.get("stream_schema")
+    READ_STREAM = dbutils.widgets.get("read_stream_schema").strip() or STREAM
     MODEL_NAME = dbutils.widgets.get("model_name")
     BAND = [float(x) for x in dbutils.widgets.get("band_nm").split(",")]
     LAND_WITHIN = int(dbutils.widgets.get("land_within_min"))
@@ -48,6 +51,7 @@ except Exception:
     STREAM, MODEL_NAME, BAND, LAND_WITHIN, MAX_DAY_HOLDS, MIN_POS = (
         "skywatch.stream", "skywatch.ml.hold_risk", [30.0, 90.0], 90, 2, 40,
     )
+    READ_STREAM = STREAM
 print(f"band {BAND} nm | land within {LAND_WITHIN} min | max {MAX_DAY_HOLDS} holds/icao/day | need {MIN_POS} positives")
 
 # COMMAND ----------
@@ -62,20 +66,20 @@ import pyspark.sql.functions as F
 held_segs = spark.sql(f"""
 WITH hold_end AS (
   SELECT i.seg_id, i.icao, to_date(i.event_ts) AS d, max(g.snapshot_ts) AS t_end
-  FROM {STREAM}.gold_irregularities i
-  JOIN {STREAM}.gold_tracks g ON g.seg_id = i.seg_id
+  FROM {READ_STREAM}.gold_irregularities i
+  JOIN {READ_STREAM}.gold_tracks g ON g.seg_id = i.seg_id
   WHERE i.kind = 'holding'
   GROUP BY 1, 2, 3
 ),
 loiter AS (
   SELECT icao, to_date(event_ts) AS d, count(*) AS n
-  FROM {STREAM}.gold_irregularities WHERE kind = 'holding' GROUP BY 1, 2
+  FROM {READ_STREAM}.gold_irregularities WHERE kind = 'holding' GROUP BY 1, 2
 ),
 linked AS (
   SELECT he.seg_id, coalesce(l.n, 1) AS same_day_holds, min(td.touchdown_ts) AS td_ts
   FROM hold_end he
   LEFT JOIN loiter l ON l.icao = he.icao AND l.d = he.d
-  LEFT JOIN {STREAM}.gold_touchdowns td ON td.icao = he.icao
+  LEFT JOIN {READ_STREAM}.gold_touchdowns td ON td.icao = he.icao
        AND td.touchdown_ts > he.t_end
        AND td.touchdown_ts < he.t_end + make_interval(0, 0, 0, 0, 0, {LAND_WITHIN}, 0)
   GROUP BY 1, 2
@@ -83,7 +87,7 @@ linked AS (
 SELECT seg_id FROM linked WHERE td_ts IS NOT NULL AND same_day_holds <= {MAX_DAY_HOLDS}
 """)
 n_pos_segs = held_segs.count()
-n_raw_holds = spark.table(f"{STREAM}.gold_irregularities").where(F.col("kind") == "holding").count()
+n_raw_holds = spark.table(f"{READ_STREAM}.gold_irregularities").where(F.col("kind") == "holding").count()
 print(f"{n_raw_holds} detected 'holding' segments -> {n_pos_segs} genuine arrival holds "
       f"(held then landed at KATL within {LAND_WITHIN} min, not a loiterer)")
 
@@ -106,7 +110,7 @@ FEATURES = [
     "hour_utc", "dow", "airport_inbound_count",
 ]
 
-at = (spark.table(f"{STREAM}.gold_arrival_tracks")
+at = (spark.table(f"{READ_STREAM}.gold_arrival_tracks")
       .where((F.col("dist_to_apt_nm") >= BAND[0]) & (F.col("dist_to_apt_nm") <= BAND[1]))
       .where(F.col("gs_kt") > 60)
       .withColumn("naive_eta_min", F.col("dist_to_apt_nm") / F.col("gs_kt") * 60.0)
