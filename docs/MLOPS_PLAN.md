@@ -16,10 +16,10 @@ production, retrained on a trigger, released by tag with a rollback path.
 |---|---|---|
 | IaC (Asset Bundle) | ✅ all resources bundled | one target (`dev`); no staging/prod |
 | Experiment tracking | ✅ MLflow + UC registry, `@champion`/`@challenger` | promotion is inline in `train_eta.py`, not a gated step |
-| Versioned pipeline code | ✅ git, feature-branch + PR | no CI — nothing runs on a PR |
+| Versioned pipeline code | ✅ git, feature-branch + PR, CI runs lint/test/validate on every PR | environment gap only — see Environments row |
 | Batch scoring → Delta | ✅ 3 scoring jobs (`score_eta`, `score_demand`, `score_irregularities`) | deployed PAUSED, no enforced cadence |
 | Testing | 🟡 started | 39 pytest tests (geometry, ETA features, demand-forecast lib) — see §6a. `build_gold.py` transforms + CI wiring still open |
-| Environments | ❌ | dev only; `skywatch.stream` referenced across ~6 files |
+| Environments | ✅ dev (live) + staging (CI-deployed, isolated catalog) | no literal `prod` tier — by design, see Track 3 |
 | Monitoring | ❌ | `predictions_scored` computes error but nothing watches it; no drift, no freshness, no alerts |
 | Retraining | ❌ manual | no trigger, no schedule, no automation |
 | Release management | ❌ | no tags, no changelog, no rollback runbook |
@@ -44,12 +44,24 @@ with `%run` / `dbutils` — not importable, not testable.
 - A tiny ADS-B fixture + golden-output test for the gold transforms.
 
 ### Track 2 — CI pipeline (GitHub Actions)
-- **PR** → `pytest` + `ruff` + `databricks bundle validate -t dev`
-- **merge to `main`** → `bundle deploy -t staging`
-- **release tag `v*`** → `bundle deploy -t prod`, behind a GitHub Environment with a required
-  reviewer
-- Auth: service-principal OAuth (M2M) — `DATABRICKS_CLIENT_ID` / `DATABRICKS_CLIENT_SECRET` in
-  GH Secrets; scoped PAT as the documented fallback if Free Edition blocks SP OAuth.
+
+**Done, 2026-09-16 — see §6a.** Revised scope to match Track 3's dev/staging (no literal
+`prod` target — see that section for why):
+- **PR** (`.github/workflows/pr-checks.yml`) → `pytest` + `ruff` (no credentials needed) →
+  `databricks bundle validate` against **both** bundles (root `-t dev`, `serving_staging -t
+  staging`) — needs the `skywatch-ci` SP.
+- **merge to `main`** (`.github/workflows/deploy-staging.yml`) → `bundle deploy -t staging`
+  only. Deliberately does **not** touch the root `databricks.yml` / `dev` target — promoting a
+  change to the live `dev` environment stays a manual, human-run deploy. That's a Track 4
+  (promotion gate) decision, not CI plumbing; revisit whether it deserves its own
+  tag-triggered, approval-gated workflow once Track 4 exists.
+- Auth: reuses the **same `skywatch-ci` service principal Track 3 already created** — no
+  separate CI identity needed. OAuth M2M (`DATABRICKS_CLIENT_ID` / `DATABRICKS_CLIENT_SECRET`
+  / `DATABRICKS_HOST`) stored as GitHub repository secrets. PAT fallback not needed — SP OAuth
+  worked on the first try on this Free Edition workspace.
+- **Public-repo note:** GitHub withholds secrets from workflows triggered by fork PRs (a
+  built-in protection) — the `validate` job will fail there. Expected, not a bug; this project
+  has one contributor.
 
 ### Track 3 — Environments (catalog isolation, one workspace)
 
@@ -317,6 +329,24 @@ the two-bundle split wasn't in the original scope).
       it doesn't own). Confirmed `RUNNING` / `ACTIVE` via the Apps API.
     - **Remaining for Track 3 / Track 2**: nothing blocking left for staging itself. Track 2
       (CI) can now reuse the same `skywatch-ci` SP for GitHub Actions once that track starts.
+
+- **2026-09-16 — Track 2 done.** `.github/workflows/pr-checks.yml` (lint + test + validate
+  both bundles on every PR) and `deploy-staging.yml` (redeploy `serving_staging` on every merge
+  to `main`), both authenticated as the same `skywatch-ci` SP from Track 3 — no separate CI
+  identity needed.
+  - Added `pyproject.toml` for `ruff` (scoped to `E9`/`F` — real bugs and syntax errors, not
+    style): `dbutils`/`spark`/`display`/`dlt`/`sc` declared as `builtins` (Databricks-injected
+    runtime globals, not undefined names), and a `per-file-ignores` for `F821` specifically on
+    the four notebooks that `%run` a shared module (`score_eta.py`, `train_eta.py`,
+    `score_demand.py`, `forecast_demand.py`) — `%run` injects names at runtime in a way ruff
+    can't see statically. Ran it for real first: found one genuine issue (an unused
+    `timedelta` import in `backfill.py`), fixed; everything else was the expected
+    notebook-global noise, now silenced correctly rather than papered over with a blanket
+    ignore.
+  - GitHub repository secrets set (`DATABRICKS_HOST`, `DATABRICKS_CLIENT_ID`,
+    `DATABRICKS_CLIENT_SECRET`) from the `skywatch-ci` SP's own OAuth credentials.
+  - **Not done**: any path that deploys to `dev` / the live environment. Deliberately left
+    manual — see the Track 2 section above for why.
 
 ---
 
