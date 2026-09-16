@@ -1,0 +1,32 @@
+# SkyWatch — Model 1 promotion gate.
+# Evaluates @challenger vs @champion on a pinned holdout and reports a promote/hold
+# recommendation. Never flips @champion on its own — see src/promote_eta.py.
+#   databricks bundle run skywatch_promote_eta -t dev                                    # dry run
+#   databricks bundle run skywatch_promote_eta -t dev --var="eta_promote_apply=true"      # apply
+
+resources:
+  jobs:
+    skywatch_promote_eta:
+      name: skywatch-promote-eta
+      max_concurrent_runs: 1
+      timeout_seconds: 1800
+      tags:
+        project: skywatch
+        component: ml
+
+      tasks:
+        - task_key: promote
+          notebook_task:
+            notebook_path: ../src/promote_eta.py
+            base_parameters:
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              model_name: ${var.catalog}.ml.eta_touchdown
+              test_date: ${var.eta_test_date}
+              holdout_table_version: ${var.eta_holdout_table_version}
+              min_improvement_pct: ${var.eta_min_improvement_pct}
+              noise_band_pct: ${var.eta_noise_band_pct}
+              max_band_regression_min: ${var.eta_max_band_regression_min}
+              apply: ${var.eta_promote_apply}
+
+      queue:
+        enabled: true

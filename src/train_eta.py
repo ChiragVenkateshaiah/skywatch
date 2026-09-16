@@ -285,14 +285,14 @@ mv = mlflow.register_model(model_uri, MODEL_NAME)
 client.set_registered_model_alias(MODEL_NAME, "challenger", mv.version)
 client.set_model_version_tag(MODEL_NAME, mv.version, "test_mae_min", f"{model_mae:.3f}")
 client.set_model_version_tag(MODEL_NAME, mv.version, "test_date", TEST_DATE)
+client.set_model_version_tag(MODEL_NAME, mv.version, "baseline_mae_min", f"{baseline_mae:.3f}")
 
-if model_mae < baseline_mae:
-    client.set_registered_model_alias(MODEL_NAME, "champion", mv.version)
-    print(f"registered {MODEL_NAME} v{mv.version} as @challenger AND @champion "
-          f"(beats baseline: {model_mae:.2f} < {baseline_mae:.2f})")
-else:
-    print(f"registered {MODEL_NAME} v{mv.version} as @challenger only "
-          f"(did NOT beat baseline {baseline_mae:.2f})")
+# Promotion to @champion is a separate, gated decision — see src/promote_eta.py
+# (docs/MLOPS_PLAN.md Track 4). This job's job is training a candidate, not deciding whether
+# it ships: beating a naive "distance / speed" baseline was never a real promotion bar.
+print(f"registered {MODEL_NAME} v{mv.version} as @challenger "
+      f"(test MAE {model_mae:.2f} vs baseline {baseline_mae:.2f}) — "
+      f"run promote_eta.py to evaluate it against @champion")
 
 # COMMAND ----------
 # MAGIC %md ## 8. A/B — closure fix vs the pre-fix training set (Delta time travel)

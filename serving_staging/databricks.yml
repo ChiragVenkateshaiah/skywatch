@@ -89,6 +89,22 @@ variables:
   eta_ab_table_version:
     description: Blank = skip the A/B cell (staging has no reason to run this).
     default: ""
+  eta_holdout_table_version:
+    description: Delta version of gold_arrival_tracks to pin the gate holdout to (blank = current).
+    default: ""
+  eta_min_improvement_pct:
+    description: Promote if overall MAE improves by at least this percent vs @champion.
+    default: "2.0"
+  eta_noise_band_pct:
+    description: Also promote if within this percent of @champion (not meaningfully worse).
+    default: "1.0"
+  eta_max_band_regression_min:
+    description: Hold if any distance band's MAE gets worse than this many minutes vs @champion.
+    default: "0.15"
+  eta_promote_apply:
+    description: >-
+      false = dry run (report only). true = apply the promotion, if the gate passes.
+    default: "false"
 
   # --- Model 2: arrival demand forecast ---
   demand_horizon_bins:
