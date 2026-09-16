@@ -1,0 +1,20 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = ["serving_staging/.databricks", ".databricks"]
+# Databricks notebooks (src/*.py) inject dbutils/spark/dlt/display/sc at runtime — these
+# aren't undefined names, they're the platform's own globals.
+builtins = ["dbutils", "spark", "display", "dlt", "sc"]
+
+[tool.ruff.lint]
+# Kept intentionally narrow for CI: real bugs (F) and syntax-adjacent errors (E9), not style.
+select = ["E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# `%run ./eta_features` / `%run ./demand_lib` inject names into the calling notebook's
+# namespace at runtime — a Databricks mechanism ruff can't see statically. F821 on these
+# specific names would be permanent noise; other F-codes (unused imports/vars) stay active.
+"src/score_eta.py" = ["F821"]
+"src/train_eta.py" = ["F821"]
+"src/score_demand.py" = ["F821"]
+"src/forecast_demand.py" = ["F821"]

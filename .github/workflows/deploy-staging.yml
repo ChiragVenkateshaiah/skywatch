@@ -1,0 +1,29 @@
+name: Deploy staging
+
+# docs/MLOPS_PLAN.md Track 2/3. Every merge to main redeploys the serving_staging/ bundle,
+# authenticated as the skywatch-ci service principal (Track 3). Deliberately does NOT touch
+# the root databricks.yml / dev target — that stays a manual, human-run deploy (dev is the
+# live environment this project's demo/LinkedIn post point at; promoting changes there is a
+# Track 4 (promotion gate) concern, not CI plumbing).
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+      DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Databricks CLI
+        run: curl -fsSL https://raw.githubusercontent.com/databricks/cli/main/install.sh | sh
+
+      - name: Deploy serving_staging
+        working-directory: serving_staging
+        run: databricks bundle deploy -t staging --var="staging_run_as=${{ secrets.DATABRICKS_CLIENT_ID }}"
