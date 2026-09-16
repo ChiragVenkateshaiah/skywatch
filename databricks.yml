@@ -176,6 +176,26 @@ variables:
     description: Pin score_demand.py's as-of 15-min bin (0-95) for validation. Blank = current time.
     default: ""
 
+  # --- Model 2 promotion gate (src/promote_demand.py) ---
+  demand_holdout_table_version:
+    description: >-
+      Delta version of gold_demand_15m to pin the promotion-gate evaluation to (blank = current).
+    default: ""
+  demand_min_improvement_pct:
+    description: Promote if overall MASE improves by at least this percent vs @champion.
+    default: "2.0"
+  demand_noise_band_pct:
+    description: Also promote if within this percent of @champion (not meaningfully worse).
+    default: "1.0"
+  demand_max_band_regression_mase:
+    description: Hold if any horizon bucket's MASE gets worse than this much vs @champion.
+    default: "0.05"
+  demand_promote_apply:
+    description: >-
+      false = report the gate recommendation only (dry run). true = apply it IF the gate
+      passes — the human-approval step, same pattern as eta_promote_apply.
+    default: "false"
+
   # --- Model 3: hold-risk classifier (src/train_hold_risk.py) ---
   holdrisk_band_nm:
     description: Decision band (min,max nm) — rows this far out are the training/serving population.

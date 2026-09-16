@@ -122,6 +122,22 @@ variables:
   demand_as_of_bin:
     description: Pin score_demand.py's as-of 15-min bin. Blank = current time.
     default: ""
+  demand_holdout_table_version:
+    description: Delta version of gold_demand_15m to pin the gate evaluation to (blank = current).
+    default: ""
+  demand_min_improvement_pct:
+    description: Promote if overall MASE improves by at least this percent vs @champion.
+    default: "2.0"
+  demand_noise_band_pct:
+    description: Also promote if within this percent of @champion (not meaningfully worse).
+    default: "1.0"
+  demand_max_band_regression_mase:
+    description: Hold if any horizon bucket's MASE gets worse than this much vs @champion.
+    default: "0.05"
+  demand_promote_apply:
+    description: >-
+      false = dry run (report only). true = apply the promotion, if the gate passes.
+    default: "false"
 
   # --- Model 3: hold-risk classifier (dormant — see train_hold_risk.py) ---
   holdrisk_band_nm:
