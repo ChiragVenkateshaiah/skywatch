@@ -1,0 +1,43 @@
+# SkyWatch — model health monitoring (DIY Lakehouse Monitoring substitute, Track 5).
+# Writes to skywatch.ml.model_health: feature drift (PSI), performance vs the registered
+# champion, freshness/volume. dev-only — see src/monitor.py's header for why.
+#
+# Deployed PAUSED like everything else in this project — this is the one job the plan actually
+# calls for running live (low-frequency), once you're ready:
+#   databricks bundle deploy -t dev --var="monitor_pause_status=UNPAUSED"
+
+resources:
+  jobs:
+    skywatch_monitor:
+      name: skywatch-monitor
+      max_concurrent_runs: 1
+      timeout_seconds: 1800
+      tags:
+        project: skywatch
+        component: ml
+
+      tasks:
+        - task_key: monitor
+          notebook_task:
+            notebook_path: ../src/monitor.py
+            base_parameters:
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              eta_model_name: ${var.catalog}.ml.eta_touchdown
+              apt_icao: ${var.apt_icao}
+              drift_window_days: ${var.monitor_drift_window_days}
+              min_rows_for_drift: ${var.monitor_min_rows_for_drift}
+              min_predictions_for_performance: ${var.monitor_min_predictions_for_performance}
+              mae_regression_pct: ${var.monitor_mae_regression_pct}
+              freshness_stale_hours: ${var.monitor_freshness_stale_hours}
+
+      schedule:
+        quartz_cron_expression: "0 0 */6 * * ?"   # every 6 h — low-frequency, per the plan
+        timezone_id: UTC
+        pause_status: ${var.monitor_pause_status}
+
+      email_notifications:
+        on_failure:
+          - ${var.notification_email}
+
+      queue:
+        enabled: true

@@ -167,15 +167,27 @@ notebooks, and split every `SELECT ... FROM {STREAM}.gold_*` from every
   isn't a true generalization test.
 
 ### Track 5 — Monitoring (DIY — Lakehouse Monitoring is paid)
-`src/monitor.py` + a **live, low-frequency** `skywatch_monitor` job → `skywatch.ml.model_health`:
 
-- **feature drift** — PSI / KS on `ETA_FEATURES` between the training snapshot and the last N
-  days of `predictions`
-- **performance** — rolling MAE from `predictions_scored` vs the champion's registered backtest
-  number
-- **freshness / volume** — poller landing rows; row-count anomaly vs 7-day median
+**Code done, 2026-09-16 — see §6a.** `src/monitor.py` + `skywatch_monitor` job (dev-only —
+see the notebook's header for why) → `skywatch.ml.model_health`:
 
-Dashboard tile + a **Databricks SQL Alert** on threshold breach → notification.
+- **feature drift** — PSI (`src/lib/drift.py`, unit-tested) per `ETA_FEATURES` column,
+  training population (`gold_arrival_tracks`, run through the same `add_eta_features()`
+  transform as training) vs recent live `predictions`
+- **performance** — rolling MAE from `predictions_scored` (current `@champion`'s version only)
+  vs that version's own registered `test_mae_min` tag
+- **freshness / volume** — hours since the last live report; today's report count vs the
+  trailing 7-day median. This project's poller runs in bursts, not continuously — these are
+  anomaly checks against the collection pattern that actually exists, not an uptime SLA
+- every check has a minimum-sample gate and reports "insufficient data" rather than a
+  confident-sounding number computed from noise — found live (see §6a): with real
+  early-stage data volumes (148 live rows, 4 matched predictions), the original defaults
+  produced 17 spurious "significant" drift flags purely from small-sample PSI noise
+
+**Still open (your hands-on part, per the division of labour, §4):**
+- **Dashboard tile** — Genie Code prompt below, ready to paste
+- **Databricks SQL Alert** + notification destination — candidate query below; creating the
+  actual Alert object and picking where it notifies is your call, not automated
 
 ### Track 6 — Retraining automation
 `skywatch_retrain` workflow: `build_gold mode=full` → train → register `@challenger` → run the
@@ -217,7 +229,7 @@ substitute **and** documented as "production swaps X for Y" — itself a portfol
 | 2 CI | author `.github/workflows/*.yml`, create the SP/PAT, set GH Environments + required reviewers + branch protection | exact commands CI runs, auth setup checklist, review your YAML |
 | 3 Environments | create `skywatch_staging` catalog + schemas, create the CI service principal (shared prerequisite with Track 2), the read-only prod grants, first `serving_staging/` deploy | `serving_staging/` second bundle (§3), `read_stream_schema` split across the 5 train/score notebooks |
 | 4 Promotion gate | run `promote_eta` / `promote_demand` with `apply=true` when you want to act on a passing recommendation (that's the approval — see §2 Track 4) | done for both M1 and M2 (both envs) |
-| 5 Monitoring | configure the SQL Alert + notification destination, read the health dashboard, act on a drift signal | `monitor.py` (PSI / rolling-MAE / freshness), schedule, dashboard tile |
+| 5 Monitoring | paste the Genie Code prompt for the dashboard tile, configure the SQL Alert + notification destination, unpause `skywatch_monitor` when ready for it to run live | done: `monitor.py` (PSI / rolling-MAE / freshness), schedule, notification-email variable |
 | 6 Retraining | set the schedule, trigger a drift-driven retrain once, review the challenger PR | wire the retrain workflow + the three triggers |
 | 7 Release | cut a tagged release, write a changelog entry, practice one rollback | semver + release-notes convention, tag → prod path, rollback doc |
 | 8 Runbooks | write each runbook the first time you perform that operation | model cards, MLOps architecture doc, review runbooks |
@@ -410,6 +422,54 @@ the two-bundle split wasn't in the original scope).
     a contrived example) — confirmed via the `gate_verdict` tag, and confirmed `@champion`
     stayed at v3 throughout (dry run). Reverted `@challenger` back to v3 afterward (its
     original state) — no lasting change to the registry from this verification.
+
+- **2026-09-16 — Track 5 code done, same day.** `src/monitor.py` + `skywatch_monitor` job
+  (dev-only) + `src/lib/drift.py::psi` (unit-tested, 15 cases — identical/shifted/moderate-shift
+  distributions, no-spread reference, empty/NaN inputs).
+  - **Fixed a real bug found by actually running it, twice**: (1) the drift reference query
+    selected raw `gold_arrival_tracks` columns directly — missing `bearing_sin`/`is_heavy`/
+    `hour_sin`/etc., which are *derived* by `add_eta_features()` at load time, not stored
+    columns. `KeyError: 'bearing_sin'` on the first real run. Fixed by running the reference
+    query through the same transform training uses. (2) the freshness query filtered `latest`
+    to *today's* date only — with this project's bursty poller (last real data 2 days old),
+    that silently returned NULL freshness instead of correctly reporting "60 hours stale."
+    Split into two queries: `latest` unfiltered, `n_today` separately for the volume check.
+  - **Also corrected the default thresholds after seeing real output, not assumed defaults**:
+    the first successful run (before the freshness fix, with `min_rows_for_drift=30`) produced
+    **17 spurious "significant" drift flags** from PSI computed on a 148-row comparison sample
+    across ~10 bins (~15 rows/bin — mostly sampling noise, not real drift) and a performance
+    regression flag from just 4 matched predictions. Raised `min_rows_for_drift` to 200 and
+    added a new `min_predictions_for_performance` (20) gate — both checks now correctly report
+    "insufficient data" at this project's actual early-stage data volume instead of confidently
+    reporting noise. Deleted the 18 rows that earlier run had written (test-config artifacts,
+    not real signal) before the corrected final verification run.
+  - **Final verified run**: drift and performance correctly skip (insufficient data); volume
+    correctly skips (only 1 prior day in the window); freshness correctly and honestly flags
+    real staleness (60.3h since the last report — true, since the poller hasn't run today).
+  - `notification_email` added as a bundle variable with a placeholder default
+    (`you@example.com`) rather than a hardcoded address — this repo is public, and no other
+    file in it commits a real email. Deployed the real address as a `--var` at deploy time only
+    (never written to a tracked file).
+  - **Not done (your hands-on part, per §4)**: the dashboard tile (Genie Code prompt delivered
+    in-conversation, per the ML_ROADMAP.md §2.1 hand-off protocol — not duplicated here) and
+    the SQL Alert + notification destination, below.
+
+### Track 5 handoff — SQL Alert
+
+Candidate query for a Databricks SQL Alert (Catalog Explorer → SQL Editor → save this as a
+query, then create an Alert on it — the alert object and where it notifies are your call, not
+automated):
+
+```sql
+SELECT check_type, metric_name, value, severity, detail, checked_at
+FROM skywatch.ml.model_health
+WHERE severity = 'significant'
+  AND checked_at >= current_timestamp() - INTERVAL 6 HOURS
+ORDER BY checked_at DESC
+```
+
+Trigger condition: row count > 0. Evaluation schedule should match (or trail slightly behind)
+`skywatch_monitor`'s own cadence (every 6 h) so the alert checks shortly after each run.
 
 ## 7. Relationship to the roadmap
 
