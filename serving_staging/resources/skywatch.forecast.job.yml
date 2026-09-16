@@ -1,0 +1,28 @@
+# SkyWatch (staging) — Model 2 training / backtest job (arrival demand forecast).
+# Reads prod's real gold_demand_15m (read-only), registers into staging's own skywatch_staging.ml.
+
+resources:
+  jobs:
+    skywatch_forecast_demand_staging:
+      name: skywatch-forecast-demand-staging
+      max_concurrent_runs: 1
+      timeout_seconds: 7200
+      tags:
+        project: skywatch
+        component: ml
+        env: staging
+
+      tasks:
+        - task_key: forecast
+          notebook_task:
+            notebook_path: ../../src/forecast_demand.py
+            base_parameters:
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              read_stream_schema: ${var.read_catalog}.${var.stream_schema}
+              model_name: ${var.catalog}.ml.demand_forecast
+              horizon_bins: ${var.demand_horizon_bins}
+              cut_bins: ${var.demand_cut_bins}
+              run_finetune: ${var.demand_run_finetune}
+
+      queue:
+        enabled: true
