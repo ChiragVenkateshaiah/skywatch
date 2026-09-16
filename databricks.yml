@@ -204,6 +204,45 @@ variables:
     description: Most-recent collection days held out for the Model 3 evaluation.
     default: "4"
 
+  # --- Notifications ---
+  notification_email:
+    description: >-
+      Where skywatch_monitor's on_failure email goes. Placeholder on purpose — this repo is
+      public; override with --var="notification_email=you@example.com" at deploy time (or a
+      local, gitignored variable-overrides file) rather than committing a real address here.
+    default: "you@example.com"
+
+  # --- Model health monitoring (src/monitor.py) — dev-only, see Track 5 ---
+  monitor_drift_window_days:
+    description: Recent-data window for drift/performance checks, days.
+    default: "7"
+  monitor_min_rows_for_drift:
+    description: >-
+      Skip the drift check below this many rows in either population — PSI on ~10 bins is
+      mostly sampling noise below a few hundred rows, and this project's bursty live poller
+      often won't have that many recent rows yet. "Insufficient data" is the honest answer.
+    default: "200"
+  monitor_min_predictions_for_performance:
+    description: Skip the performance check below this many matched predictions.
+    default: "20"
+  monitor_mae_regression_pct:
+    description: >-
+      Flag performance as significant if rolling MAE is worse than the registered test MAE by
+      more than this percent.
+    default: "20.0"
+  monitor_freshness_stale_hours:
+    description: >-
+      Flag freshness as significant if the latest live report is older than this. This
+      project's poller runs in bursts, not continuously, so this is generous on purpose —
+      it's an anomaly check, not an uptime SLA.
+    default: "24"
+  monitor_pause_status:
+    description: >-
+      PAUSED or UNPAUSED — the monitor job's own schedule. Deployed PAUSED by default,
+      matching this project's pattern of not silently turning on a recurring schedule; the
+      plan calls for this one to actually run live (low-frequency) once you're ready for it.
+    default: PAUSED
+
 targets:
   dev:
     mode: development
