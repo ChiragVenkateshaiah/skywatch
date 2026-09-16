@@ -26,6 +26,8 @@
 # COMMAND ----------
 try:
     dbutils.widgets.text("stream_schema", "skywatch.stream")
+    # blank = same as stream_schema — see the note in score_eta.py / docs/MLOPS_PLAN.md Track 3.
+    dbutils.widgets.text("read_stream_schema", "")
     dbutils.widgets.text("model_name", "skywatch.ml.demand_forecast")
     dbutils.widgets.text("model_alias", "champion")
     dbutils.widgets.text("apt_icao", "KATL")
@@ -33,6 +35,7 @@ try:
     dbutils.widgets.text("score_date", "")     # blank = today (UTC)
     dbutils.widgets.text("as_of_bin", "")      # blank = current 15-min bin from the wall clock
     STREAM = dbutils.widgets.get("stream_schema")
+    READ_STREAM = dbutils.widgets.get("read_stream_schema").strip() or STREAM
     MODEL_NAME = dbutils.widgets.get("model_name")
     ALIAS = dbutils.widgets.get("model_alias")
     APT_ICAO = dbutils.widgets.get("apt_icao")
@@ -43,6 +46,7 @@ except Exception:
     STREAM, MODEL_NAME, ALIAS, APT_ICAO, H, SCORE_DATE, AS_OF_BIN = (
         "skywatch.stream", "skywatch.ml.demand_forecast", "champion", "KATL", 12, "", "",
     )
+    READ_STREAM = STREAM
 
 # COMMAND ----------
 # MAGIC %md ## 1. Load the champion model
@@ -80,7 +84,7 @@ print(f"scoring {APT_ICAO} for {score_date} (dow={dow}) as of bin {current_slot}
 
 today_counts = spark.sql(f"""
   SELECT floor((hour(touchdown_ts) * 60 + minute(touchdown_ts)) / 15) AS slot, count(*) AS n
-  FROM {STREAM}.gold_touchdowns
+  FROM {READ_STREAM}.gold_touchdowns
   WHERE apt_icao = '{APT_ICAO}' AND to_date(touchdown_ts) = '{score_date.isoformat()}'
   GROUP BY 1
 """).toPandas().set_index("slot")["n"].to_dict()

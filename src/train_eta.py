@@ -23,12 +23,15 @@
 # COMMAND ----------
 try:
     dbutils.widgets.text("stream_schema", "skywatch.stream")
+    # blank = same as stream_schema — see the note in score_eta.py / docs/MLOPS_PLAN.md Track 3.
+    dbutils.widgets.text("read_stream_schema", "")
     dbutils.widgets.text("model_name", "skywatch.ml.eta_touchdown")
     dbutils.widgets.text("test_date", "2026-09-01")
     dbutils.widgets.text("max_evals", "24")
     dbutils.widgets.text("run_automl", "false")
     dbutils.widgets.text("ab_table_version", "")
     STREAM = dbutils.widgets.get("stream_schema")
+    READ_STREAM = dbutils.widgets.get("read_stream_schema").strip() or STREAM
     MODEL_NAME = dbutils.widgets.get("model_name")
     TEST_DATE = dbutils.widgets.get("test_date")
     MAX_EVALS = int(dbutils.widgets.get("max_evals"))
@@ -38,7 +41,8 @@ except Exception:
     STREAM, MODEL_NAME, TEST_DATE, MAX_EVALS, RUN_AUTOML, AB_TABLE_VERSION = (
         "skywatch.stream", "skywatch.ml.eta_touchdown", "2026-09-01", 24, False, "",
     )
-print(f"train set: {STREAM}.gold_arrival_tracks | test day: {TEST_DATE} | model: {MODEL_NAME}")
+    READ_STREAM = STREAM
+print(f"train set: {READ_STREAM}.gold_arrival_tracks | test day: {TEST_DATE} | model: {MODEL_NAME}")
 
 # COMMAND ----------
 # MAGIC %run ./eta_features
@@ -66,12 +70,12 @@ FEATURES = ETA_FEATURES
 FEATURES_CAT = ETA_CAT
 TARGET = ETA_TARGET
 
-confirmed_segs = (spark.table(f"{STREAM}.gold_touchdowns")
+confirmed_segs = (spark.table(f"{READ_STREAM}.gold_touchdowns")
                   .where(F.col("touchdown_confidence") == "confirmed")
                   .select("seg_id"))
 
 sdf = add_eta_features(
-    spark.table(f"{STREAM}.gold_arrival_tracks")
+    spark.table(f"{READ_STREAM}.gold_arrival_tracks")
     .join(confirmed_segs, "seg_id")
     .where(F.col(TARGET).between(0.5, 40))
     .where(F.col("dist_to_apt_nm").isNotNull() & F.col("alt_ft").isNotNull())
@@ -305,7 +309,7 @@ if AB_TABLE_VERSION:
     ab_cat_idx = [AB_FEATURES.index(c) for c in FEATURES_CAT]
 
     o = add_eta_features(
-        spark.sql(f"SELECT * FROM {STREAM}.gold_arrival_tracks VERSION AS OF {AB_TABLE_VERSION}")
+        spark.sql(f"SELECT * FROM {READ_STREAM}.gold_arrival_tracks VERSION AS OF {AB_TABLE_VERSION}")
         .where(F.col(TARGET).between(0.5, 40))
         .where(F.col("dist_to_apt_nm").isNotNull() & F.col("gs_kt").isNotNull()
                & F.col("alt_ft").isNotNull())

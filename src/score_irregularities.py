@@ -19,25 +19,29 @@
 # COMMAND ----------
 try:
     dbutils.widgets.text("stream_schema", "skywatch.stream")
+    # blank = same as stream_schema — see the note in score_eta.py / docs/MLOPS_PLAN.md Track 3.
+    dbutils.widgets.text("read_stream_schema", "")
     dbutils.widgets.text("apt_icao", "KATL")
     dbutils.widgets.text("apt_elev_ft", "1026")
     dbutils.widgets.text("freshness_min", "20")     # an aircraft counts as "current" if seen this recently
     dbutils.widgets.text("lookback_min", "30")      # how much recent track to judge geometry on
     STREAM = dbutils.widgets.get("stream_schema")
+    READ_STREAM = dbutils.widgets.get("read_stream_schema").strip() or STREAM
     APT_ICAO = dbutils.widgets.get("apt_icao")
     APT_ELEV_FT = int(dbutils.widgets.get("apt_elev_ft"))
     FRESH = int(dbutils.widgets.get("freshness_min"))
     LOOKBACK = int(dbutils.widgets.get("lookback_min"))
 except Exception:
     STREAM, APT_ICAO, APT_ELEV_FT, FRESH, LOOKBACK = "skywatch.stream", "KATL", 1026, 20, 30
+    READ_STREAM = STREAM
 
 print(f"irregularity flags for {APT_ICAO}  (fresh {FRESH} min, lookback {LOOKBACK} min)")
 
 # COMMAND ----------
 flags = spark.sql(f"""
-WITH latest AS (SELECT max(snapshot_ts) AS mx FROM {STREAM}.gold_tracks WHERE apt_icao = '{APT_ICAO}'),
+WITH latest AS (SELECT max(snapshot_ts) AS mx FROM {READ_STREAM}.gold_tracks WHERE apt_icao = '{APT_ICAO}'),
 win AS (
-  SELECT g.* FROM {STREAM}.gold_tracks g, latest
+  SELECT g.* FROM {READ_STREAM}.gold_tracks g, latest
   WHERE g.apt_icao = '{APT_ICAO}' AND g.snapshot_ts >= latest.mx - INTERVAL {LOOKBACK} MINUTES
 ),
 cur AS (
