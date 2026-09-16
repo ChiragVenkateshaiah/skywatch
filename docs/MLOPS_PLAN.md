@@ -15,7 +15,7 @@ production, retrained on a trigger, released by tag with a rollback path.
 | Capability | Have | Gap |
 |---|---|---|
 | IaC (Asset Bundle) | ✅ all resources bundled | one target (`dev`); no staging/prod |
-| Experiment tracking | ✅ MLflow + UC registry, `@champion`/`@challenger`, gated promotion (M1) | M2's promotion still inline in `forecast_demand.py` — not yet extracted |
+| Experiment tracking | ✅ MLflow + UC registry, `@champion`/`@challenger`, gated promotion (M1 + M2) | none — both models' promotion is gated now |
 | Versioned pipeline code | ✅ git, feature-branch + PR, CI runs lint/test/validate on every PR | environment gap only — see Environments row |
 | Batch scoring → Delta | ✅ 3 scoring jobs (`score_eta`, `score_demand`, `score_irregularities`) | deployed PAUSED, no enforced cadence |
 | Testing | 🟡 started | 39 pytest tests (geometry, ETA features, demand-forecast lib) — see §6a. `build_gold.py` transforms + CI wiring still open |
@@ -156,9 +156,15 @@ notebooks, and split every `SELECT ... FROM {STREAM}.gold_*` from every
   report, *is* the approval. A failing gate is never applied regardless of `apply`. No GitHub
   Environment / manual-approval-task machinery needed — simpler, and matches what Databricks
   Jobs actually support today.
-- **M2's promotion gate (MASE-based) is not yet built** — `forecast_demand.py` still
-  auto-promotes inline, same pattern M1 had before this. Fast-follow using the same
-  `evaluate_gate` function once there's a reason to prioritize it.
+- **M2's promotion gate — done, same day, see §6a.** `src/promote_demand.py` +
+  `skywatch_promote_demand` / `_staging`, reusing `evaluate_gate` unchanged: "bands" generalize
+  to horizon buckets (0-1h / 1-2h / 2-3h) instead of distance bands — a win on the 3-hour
+  aggregate can't hide a regression in the next-hour forecast, which is what a coordinator
+  acts on soonest. Same dry-run/`apply=true` human-approval mechanism as M1.
+  **Honest methodology note**: M2's champion is fit on *all* collected days (no true unseen
+  test day the way M1 has one) — the gate evaluates both models on the same pinned
+  `gold_demand_15m` snapshot instead, which is what the LODO backtest itself already does, but
+  isn't a true generalization test.
 
 ### Track 5 — Monitoring (DIY — Lakehouse Monitoring is paid)
 `src/monitor.py` + a **live, low-frequency** `skywatch_monitor` job → `skywatch.ml.model_health`:
@@ -210,7 +216,7 @@ substitute **and** documented as "production swaps X for Y" — itself a portfol
 | 1 Tests | run `pytest` locally, add cases, wire coverage | refactor notebooks → `src/lib/`, write the initial suite + fixtures |
 | 2 CI | author `.github/workflows/*.yml`, create the SP/PAT, set GH Environments + required reviewers + branch protection | exact commands CI runs, auth setup checklist, review your YAML |
 | 3 Environments | create `skywatch_staging` catalog + schemas, create the CI service principal (shared prerequisite with Track 2), the read-only prod grants, first `serving_staging/` deploy | `serving_staging/` second bundle (§3), `read_stream_schema` split across the 5 train/score notebooks |
-| 4 Promotion gate | run `promote_eta` with `apply=true` when you want to act on a passing recommendation (that's the approval — see §2 Track 4) | done for M1 (`promote_eta.py` + gate job, both envs); M2's `promote_demand.py` not started |
+| 4 Promotion gate | run `promote_eta` / `promote_demand` with `apply=true` when you want to act on a passing recommendation (that's the approval — see §2 Track 4) | done for both M1 and M2 (both envs) |
 | 5 Monitoring | configure the SQL Alert + notification destination, read the health dashboard, act on a drift signal | `monitor.py` (PSI / rolling-MAE / freshness), schedule, dashboard tile |
 | 6 Retraining | set the schedule, trigger a drift-driven retrain once, review the challenger PR | wire the retrain workflow + the three triggers |
 | 7 Release | cut a tagged release, write a changelog entry, practice one rollback | semver + release-notes convention, tag → prod path, rollback doc |
@@ -385,7 +391,25 @@ the two-bundle split wasn't in the original scope).
     may resolve libraries differently. `build_gold.py` (also a plain Job notebook) is now
     unblocked by this; `pipeline_medallion.py` is not, yet.
 
----
+- **2026-09-16 — Track 4 done (M2), same day.** `forecast_demand.py` no longer auto-promotes
+  on beating seasonal-naive (MASE < 1, also never a real bar) — challenger-only, same as M1.
+  `src/promote_demand.py` + `skywatch_promote_demand` / `_staging` reuse
+  `src/lib/promotion.py::evaluate_gate` **unchanged** — "bands" generalize cleanly to horizon
+  buckets (0-1h / 1-2h / 2-3h) instead of distance bands, metric is MASE instead of MAE, same
+  dry-run/`apply=true` mechanism.
+  - **Verified live against real registry data**, cheaper than a full LODO×cuts retrain: found
+    3 existing `demand_forecast` versions (v1-v3, all `climatological_mean`), temporarily
+    pointed `@challenger` at v1 to force a real (not synthetic) two-model comparison.
+  - **v1 hit a real, pre-existing bug**, not a bug in this work: `ModuleNotFoundError: No
+    module named 'chronos'` loading v1's pyfunc model — v1 predates the "M2 pickle fix"
+    (documented earlier in this project's history) and its cloudpickle blob still references
+    the old module-level Chronos cache even in climatology mode. `promote_demand.py` only
+    installs `scipy` (matching `score_demand.py`'s post-fix assumption), correctly, so this
+    surfaced instantly rather than silently. Switched to v2 (post-fix) instead.
+  - v2 vs champion v3: gate correctly returned **`HOLD`** (a real regression on real data, not
+    a contrived example) — confirmed via the `gate_verdict` tag, and confirmed `@champion`
+    stayed at v3 throughout (dry run). Reverted `@challenger` back to v3 afterward (its
+    original state) — no lasting change to the registry from this verification.
 
 ## 7. Relationship to the roadmap
 

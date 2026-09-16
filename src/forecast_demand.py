@@ -201,11 +201,9 @@ client.set_registered_model_alias(MODEL_NAME, "challenger", mv.version)
 client.set_model_version_tag(MODEL_NAME, mv.version, "champion_method", champ_name)
 client.set_model_version_tag(MODEL_NAME, mv.version, "bt_mase", f"{ranked.iloc[0]['mase']:.3f}")
 
-# promote if it beats seasonal-naive over the backtest
-if ranked.iloc[0]["mase"] < 1.0:
-    client.set_registered_model_alias(MODEL_NAME, "champion", mv.version)
-    print(f"registered {MODEL_NAME} v{mv.version} @challenger + @champion "
-          f"({champ_name}, MASE {ranked.iloc[0]['mase']:.2f} < 1)")
-else:
-    print(f"registered {MODEL_NAME} v{mv.version} @challenger only "
-          f"(MASE {ranked.iloc[0]['mase']:.2f} — did not beat seasonal-naive)")
+# Promotion to @champion is a separate, gated decision — see src/promote_demand.py
+# (docs/MLOPS_PLAN.md Track 4). Beating seasonal-naive (MASE < 1) was never a real promotion
+# bar — it says nothing about whether a candidate is better than the CURRENT champion.
+print(f"registered {MODEL_NAME} v{mv.version} as @challenger "
+      f"({champ_name}, backtest MASE {ranked.iloc[0]['mase']:.2f}) — "
+      f"run promote_demand.py to evaluate it against @champion")
