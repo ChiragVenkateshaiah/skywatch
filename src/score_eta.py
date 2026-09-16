@@ -25,11 +25,16 @@
 # COMMAND ----------
 try:
     dbutils.widgets.text("stream_schema", "skywatch.stream")
+    # blank = same as stream_schema (today's dev behaviour, byte-identical). A staging
+    # deploy points this at prod's real Gold tables while stream_schema stays staging's own
+    # write catalog — see docs/MLOPS_PLAN.md Track 3.
+    dbutils.widgets.text("read_stream_schema", "")
     dbutils.widgets.text("model_name", "skywatch.ml.eta_touchdown")
     dbutils.widgets.text("model_alias", "champion")
     dbutils.widgets.text("max_dist_nm", "120")
     dbutils.widgets.text("freshness_min", "20")
     STREAM = dbutils.widgets.get("stream_schema")
+    READ_STREAM = dbutils.widgets.get("read_stream_schema").strip() or STREAM
     MODEL_NAME = dbutils.widgets.get("model_name")
     ALIAS = dbutils.widgets.get("model_alias")
     MAX_DIST_NM = float(dbutils.widgets.get("max_dist_nm"))
@@ -38,7 +43,9 @@ except Exception:
     STREAM, MODEL_NAME, ALIAS, MAX_DIST_NM, FRESHNESS_MIN = (
         "skywatch.stream", "skywatch.ml.eta_touchdown", "champion", 120.0, 20,
     )
-print(f"model {MODEL_NAME}@{ALIAS} | inbound <= {MAX_DIST_NM} nm | last {FRESHNESS_MIN} min")
+    READ_STREAM = STREAM
+print(f"model {MODEL_NAME}@{ALIAS} | inbound <= {MAX_DIST_NM} nm | last {FRESHNESS_MIN} min "
+      f"| read {READ_STREAM} | write {STREAM}")
 
 # COMMAND ----------
 # MAGIC %md ## 1. Load the champion model + parity check
@@ -105,15 +112,15 @@ from pyspark.sql import functions as F
 scoring_sdf = add_eta_features(spark.sql(f"""
   WITH latest AS (
     SELECT *, row_number() OVER (PARTITION BY icao ORDER BY snapshot_ts DESC) AS rn
-    FROM {STREAM}.gold_tracks
-    WHERE snapshot_ts >= (SELECT max(snapshot_ts) FROM {STREAM}.gold_tracks)
+    FROM {READ_STREAM}.gold_tracks
+    WHERE snapshot_ts >= (SELECT max(snapshot_ts) FROM {READ_STREAM}.gold_tracks)
                          - INTERVAL {FRESHNESS_MIN} MINUTES
   ),
   inbound_ct AS (
     -- keep identical to gold_arrival_tracks in build_gold.py: only the rings the backfill
     -- (100 nm) and the live poller (250 nm) both cover
     SELECT minute_ts, apt_icao, sum(n_inbound) AS n_inbound_common_rings
-    FROM {STREAM}.gold_congestion
+    FROM {READ_STREAM}.gold_congestion
     WHERE ring IN ('00-40', '40-100')
     GROUP BY 1, 2
   )
@@ -186,7 +193,7 @@ SELECT
   p.predicted_eta_min
     - (unix_timestamp(td.touchdown_ts) - unix_timestamp(p.snapshot_ts)) / 60.0    AS error_min
 FROM {STREAM}.predictions p
-JOIN {STREAM}.gold_touchdowns td
+JOIN {READ_STREAM}.gold_touchdowns td
   ON td.icao = p.icao
  AND td.touchdown_ts BETWEEN p.snapshot_ts AND p.snapshot_ts + INTERVAL 90 MINUTES
 """)

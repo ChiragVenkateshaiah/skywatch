@@ -28,11 +28,14 @@
 # COMMAND ----------
 try:
     dbutils.widgets.text("stream_schema", "skywatch.stream")
+    # blank = same as stream_schema — see the note in score_eta.py / docs/MLOPS_PLAN.md Track 3.
+    dbutils.widgets.text("read_stream_schema", "")
     dbutils.widgets.text("model_name", "skywatch.ml.demand_forecast")
     dbutils.widgets.text("horizon_bins", "12")
     dbutils.widgets.text("cut_bins", "32,44,56,68,80")
     dbutils.widgets.text("run_finetune", "false")
     STREAM = dbutils.widgets.get("stream_schema")
+    READ_STREAM = dbutils.widgets.get("read_stream_schema").strip() or STREAM
     MODEL_NAME = dbutils.widgets.get("model_name")
     H = int(dbutils.widgets.get("horizon_bins"))
     CUTS = [int(x) for x in dbutils.widgets.get("cut_bins").split(",")]
@@ -41,7 +44,8 @@ except Exception:
     STREAM, MODEL_NAME, H, CUTS, RUN_FINETUNE = (
         "skywatch.stream", "skywatch.ml.demand_forecast", 12, [32, 44, 56, 68, 80], False,
     )
-print(f"series {STREAM}.gold_demand_15m | horizon {H} bins | cuts {CUTS} | finetune {RUN_FINETUNE}")
+    READ_STREAM = STREAM
+print(f"series {READ_STREAM}.gold_demand_15m | horizon {H} bins | cuts {CUTS} | finetune {RUN_FINETUNE}")
 
 # COMMAND ----------
 # MAGIC %md ## 1. Load the demand series
@@ -50,7 +54,7 @@ print(f"series {STREAM}.gold_demand_15m | horizon {H} bins | cuts {CUTS} | finet
 import numpy as np
 import pandas as pd
 
-demand = spark.table(f"{STREAM}.gold_demand_15m").toPandas()
+demand = spark.table(f"{READ_STREAM}.gold_demand_15m").toPandas()
 demand["arrivals"] = demand["arrivals"].astype(float)
 frames = to_day_frames(demand)
 days = sorted(frames)
