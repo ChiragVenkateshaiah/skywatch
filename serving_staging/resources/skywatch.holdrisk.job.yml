@@ -1,0 +1,27 @@
+# SkyWatch (staging) — Model 3 hold-risk classifier training (dormant — train_hold_risk.py
+# early-exits until real holds-that-land exist; kept as ready code, see docs/pitch.md).
+
+resources:
+  jobs:
+    skywatch_train_hold_risk_staging:
+      name: skywatch-train-hold-risk-staging
+      max_concurrent_runs: 1
+      timeout_seconds: 3600
+      tags:
+        project: skywatch
+        component: ml
+        env: staging
+
+      tasks:
+        - task_key: train
+          notebook_task:
+            notebook_path: ../../src/train_hold_risk.py
+            base_parameters:
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              read_stream_schema: ${var.read_catalog}.${var.stream_schema}
+              model_name: ${var.catalog}.ml.hold_risk
+              band_nm: ${var.holdrisk_band_nm}
+              test_days: ${var.holdrisk_test_days}
+
+      queue:
+        enabled: true

@@ -1,0 +1,32 @@
+# SkyWatch (staging) — Model 3 live irregularity flags (rule-based).
+# Reads prod's real gold_tracks (read-only), appends to staging's own
+# skywatch_staging.stream.irregularity_flags.
+
+resources:
+  jobs:
+    skywatch_score_irregularities_staging:
+      name: skywatch-score-irregularities-staging
+      max_concurrent_runs: 1
+      timeout_seconds: 1800
+      tags:
+        project: skywatch
+        component: ml
+        env: staging
+
+      tasks:
+        - task_key: score
+          notebook_task:
+            notebook_path: ../../src/score_irregularities.py
+            base_parameters:
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              read_stream_schema: ${var.read_catalog}.${var.stream_schema}
+              apt_icao: ${var.apt_icao}
+              apt_elev_ft: ${var.apt_elev_ft}
+
+      schedule:
+        quartz_cron_expression: "0 7/10 * * * ?"   # every 10 min, offset 7 min past
+        timezone_id: UTC
+        pause_status: ${var.staging_jobs_pause_status}
+
+      queue:
+        enabled: true
