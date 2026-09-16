@@ -52,20 +52,79 @@ with `%run` / `dbutils` — not importable, not testable.
   GH Secrets; scoped PAT as the documented fallback if Free Edition blocks SP OAuth.
 
 ### Track 3 — Environments (catalog isolation, one workspace)
+
+**Revised 2026-09-16, after hitting two real DAB constraints (below) — this supersedes the
+original dev/staging/prod table.** Scope trimmed to **dev (unchanged) + one new staging**, not
+a literal three-tier split: for a single-operator portfolio project, `dev` already **is**
+prod in practice (it's the live app your demo/LinkedIn post point at), and migrating it to a
+differently-named `prod` target would recreate the App under a new identity — new URL, breaking
+the one already shared. Not worth it. Staging is the piece that actually teaches the
+CI/promotion-gate workflow; a third tier can be revisited later if this project ever needs it.
+
 | env | catalog | mode | deploys | data |
 |---|---|---|---|---|
-| **dev** | `skywatch_dev` | `development` | you, from laptop | reads `skywatch` silver/gold **read-only**; writes own `.ml` / `.stream` |
-| **staging** | `skywatch_staging` | `production` (run-as SP) | CI on merge to `main` | same read-only pattern |
-| **prod** | `skywatch` (existing) | `production` | CI only, on release tag, behind approval | the real poller + medallion + backfill land here; real `@champion` |
+| **dev** (existing, untouched) | `skywatch` | `development` | you, from laptop, root `databricks.yml` | the real poller + medallion + backfill land here — unchanged from today |
+| **staging** (new) | `skywatch_staging` | `production`, `run_as` an SP | CI on merge to `main`, a **second, separate** bundle | reads `skywatch` silver/gold **read-only**; writes its own `.ml` / `.stream` |
 
-Data lives **once** (prod). Lower envs read a copy/sample read-only — realistic, and avoids
-running ingestion three times on Free Edition quota. Document how the catalog split maps to a
-real multi-workspace setup.
+**Constraint 1 — confirmed empirically, not assumed:** DAB has no way to exclude a resource
+from one target. Tested `resources.pipelines.skywatch_medallion: null` under a scratch target;
+`bundle validate` accepted it silently but the resolved resource graph still had the pipeline,
+fully intact. A target deploys *every* declared resource or none.
 
-- Code change: audit the ~6 files referencing `skywatch.stream`, make every one take it from a
-  bundle var.
-- Add `targets: {staging, prod}` to `databricks.yml` with `mode: production`, `run_as` an SP,
-  a `permissions` block, per-env variable files.
+**Why that's a hard blocker, not just untidy:** Free Edition allows exactly **one active
+Lakeflow pipeline per workspace**. If `staging` shared `databricks.yml` with `dev`, deploying
+`-t staging` would try to create a *second* pipeline object under staging's independent
+deployment state, and that fails outright — Free Edition rejects it. Same practical problem
+(not platform-blocked, just wasteful and pointless — staging has no poller feeding it) for the
+poller/backfill/gold jobs.
+
+**The fix: two separate bundle projects**, each with its own `databricks.yml`, deployed by two
+separate `bundle deploy` commands:
+
+1. **Root `databricks.yml` (existing) — unchanged.** Poller, pipeline, backfill, gold, the
+   legacy `skywatch_lite` job, **and** the existing `dev`-target App + train/score jobs stay
+   exactly where they are. Moving them to a new bundle would change their Databricks-side
+   identity (state is tracked by bundle name + target) — Databricks Apps and Jobs are
+   workspace-uniquely-named, so a differently-named bundle deploying "the same" resource for
+   the first time would try to *create* it, colliding with the one that already exists. This is
+   the same reasoning that ruled out a literal `prod` migration above, applied one level down.
+2. **New `serving_staging/databricks.yml` — staging-only, no `dev` target inside it** (dev's
+   serving resources already exist in the root bundle; this bundle only ever adds the staging
+   copies). Contains:
+   - `mode: production`, an explicit `workspace.root_path` (DAB requires this for
+     `mode: production` — confirmed via `bundle validate`, it errors without one), `run_as` a
+     service principal (Track 2 prerequisite — this bundle can't deploy until that SP exists).
+   - Its own **copies** (not moves) of `skywatch.train.job.yml`, `skywatch.forecast.job.yml`,
+     `skywatch.holdrisk.job.yml`, `skywatch.score.job.yml`, `skywatch.scoredemand.job.yml`,
+     `skywatch.irregularity.job.yml`, `skywatch.app.yml`, `skywatch.appkeepalive.job.yml`, each
+     with resource keys/names suffixed (e.g. `skywatch-arrival-manager-staging`) so nothing
+     collides workspace-globally with the `dev` originals. Notebook/source paths point at the
+     *same* shared `../src/*.py` and `../app/` — staging runs identical code, isolated data.
+   - Its own `variables:` block. DAB doesn't let two separate `databricks.yml` files share
+     variable definitions — this means duplicating the subset of vars these resources use
+     (`catalog`, `stream_schema`, `warehouse_id`, `apt_icao`/`apt_lat`/`apt_lon`/
+     `apt_aar_per_hour`, model names, the `eta_*`/`demand_*`/`holdrisk_*` tuning vars). Real
+     cost of the two-bundle split; bounded and worth it for correctness. Keep the two files'
+     shared var *defaults* in sync by hand — call this out in both files' header comments.
+
+**Constraint 2 — a read/write catalog split the code doesn't have yet.** Staging must *read*
+prod's real `gold_*` tables (it can never run its own ingestion — constraint 1) but *write* its
+own `predictions` / `demand_forecast` / `irregularity_flags` / registered models. Today,
+`score_eta.py` / `score_demand.py` / `score_irregularities.py` / `train_eta.py` /
+`forecast_demand.py` all take a single `stream_schema` widget used for *both* reading Gold and
+writing scoring output — there's no way to point those at two different catalogs at once.
+**Code change needed** (not started): add a second widget (`read_stream_schema`, defaulting to
+the same value as `stream_schema` so `dev`'s behavior is byte-identical) to each of those five
+notebooks, and split every `SELECT ... FROM {STREAM}.gold_*` from every
+`.saveAsTable(f"{STREAM}...")` / model-registration call — reads use `READ_STREAM`, writes use
+`STREAM`. `build_gold.py` itself doesn't need this (staging never runs it — constraint 1).
+
+**Your hands-on part (per the original division of labour), now concrete:**
+- Create the `skywatch_staging` catalog + `ml` / `stream` schemas.
+- Create a service principal for CI (this is also a Track 2 prerequisite — the two tracks are
+  now coupled at this one point); grant it `USE CATALOG` + `SELECT` on `skywatch.stream` /
+  `skywatch.ml` (read-only, prod) and full read-write on `skywatch_staging.*`.
+- First `bundle deploy` of `serving_staging/` (manual, before CI exists to do it).
 
 ### Track 4 — Promotion gate
 Pull alias-setting out of `train_eta.py` into `src/promote_eta.py` + a `skywatch_promote_eta`
@@ -126,15 +185,20 @@ substitute **and** documented as "production swaps X for Y" — itself a portfol
 |---|---|---|
 | 1 Tests | run `pytest` locally, add cases, wire coverage | refactor notebooks → `src/lib/`, write the initial suite + fixtures |
 | 2 CI | author `.github/workflows/*.yml`, create the SP/PAT, set GH Environments + required reviewers + branch protection | exact commands CI runs, auth setup checklist, review your YAML |
-| 3 Environments | create `skywatch_staging` / `skywatch_prod` (or the read-only grants), first staging deploy | `targets` block + per-env var files + `run_as` / `permissions`, finish the schema-var audit |
+| 3 Environments | create `skywatch_staging` catalog + schemas, create the CI service principal (shared prerequisite with Track 2), the read-only prod grants, first `serving_staging/` deploy | `serving_staging/` second bundle (§3), `read_stream_schema` split across the 5 train/score notebooks |
 | 4 Promotion gate | run the promote job, make the promote/hold call, approve the deployment | `promote_*.py` + metric contract + the gate job |
 | 5 Monitoring | configure the SQL Alert + notification destination, read the health dashboard, act on a drift signal | `monitor.py` (PSI / rolling-MAE / freshness), schedule, dashboard tile |
 | 6 Retraining | set the schedule, trigger a drift-driven retrain once, review the challenger PR | wire the retrain workflow + the three triggers |
 | 7 Release | cut a tagged release, write a changelog entry, practice one rollback | semver + release-notes convention, tag → prod path, rollback doc |
 | 8 Runbooks | write each runbook the first time you perform that operation | model cards, MLOps architecture doc, review runbooks |
 
-**Sequence:** Track 1 + Track 3 (parallel) → Track 2 (CI) → Track 4 → Track 5 → Track 6 →
-Track 7 / 8. Estimated 2–3 weeks part-time.
+**Sequence:** Track 1 (done, §6a) → **Track 3 and Track 2 are now coupled at the service
+principal** (Track 3's `serving_staging/` `run_as` needs the same SP Track 2's CI auth needs) —
+create the SP once, satisfies both. Practically: Track 3's code (the bundle split +
+`read_stream_schema` change) can be written and validated without the SP; the SP is only needed
+to actually *deploy* `serving_staging/`, and to wire CI. → Track 4 → Track 5 → Track 6 →
+Track 7 / 8. Estimated 2–3 weeks part-time (revised up slightly from the original estimate —
+the two-bundle split wasn't in the original scope).
 
 ---
 
