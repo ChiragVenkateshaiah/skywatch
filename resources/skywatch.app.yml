@@ -32,3 +32,23 @@ resources:
           sql_warehouse:
             id: ${var.warehouse_id}
             permission: CAN_USE
+      # Overrides app/app.yaml's env at deploy time — files under source_code_path aren't
+      # bundle-variable-substituted, so this is how catalog/schema/airport config actually
+      # varies per target (docs/MLOPS_PLAN.md Track 3). app/app.yaml keeps the same literal
+      # values as plain fallback defaults for `streamlit run app.py` outside a bundle deploy.
+      config:
+        env:
+          - name: SKYWATCH_WAREHOUSE_ID
+            value_from: warehouse
+          - name: SKYWATCH_CATALOG
+            value: ${var.catalog}
+          - name: SKYWATCH_SCHEMA
+            value: ${var.stream_schema}
+          - name: SKYWATCH_APT_ICAO
+            value: ${var.apt_icao}
+          - name: SKYWATCH_APT_LAT
+            value: ${var.apt_lat}
+          - name: SKYWATCH_APT_LON
+            value: ${var.apt_lon}
+          - name: SKYWATCH_AAR_PER_HOUR
+            value: ${var.apt_aar_per_hour}
