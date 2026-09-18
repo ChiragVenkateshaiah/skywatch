@@ -1,0 +1,109 @@
+# SkyWatch — retraining automation (Track 6). Chains the existing, already-verified-live
+# notebooks: gold_full -> {train_eta, forecast_demand} -> {promote_eta, promote_demand}, both
+# gates run as dry runs (apply is always "false" here — a retrain workflow that could auto-flip
+# @champion would defeat the entire human-approval design from Track 4). No new notebook code;
+# this is purely wiring existing pieces together as a multi-task Databricks Job.
+#
+# Model 3 (train_hold_risk.py) is deliberately NOT included — it's dormant by a settled
+# decision (0 of 159 detected holds ever landed; Model 3 stays rule-based permanently), not a
+# model that benefits from periodic retraining.
+#
+# Deployed PAUSED, dev-only (staging never runs its own gold rebuild — see Track 3). Three
+# triggers, per the plan:
+#   (a) weekly schedule — unpause it:
+#         databricks bundle deploy -t dev --var="retrain_pause_status=UNPAUSED"
+#   (b) a Track 5 drift alert — when you get the SQL Alert email, run it manually:
+#         databricks bundle run skywatch_retrain -t dev
+#   (c) new backfill days landed — same manual trigger, after scripts/backfill_local.py + fs cp
+#
+# "Demonstrated once end-to-end" (per the plan) — not left to fire unattended on a schedule
+# indefinitely, since a full gold rebuild + two full trainings every week would eventually eat
+# a day's Free Edition quota for no reason if nothing new landed.
+
+resources:
+  jobs:
+    skywatch_retrain:
+      name: skywatch-retrain
+      max_concurrent_runs: 1
+      timeout_seconds: 14400
+      tags:
+        project: skywatch
+        component: ml
+
+      tasks:
+        - task_key: gold_full
+          notebook_task:
+            notebook_path: ../src/build_gold.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.stream_schema}
+              apt_elev_ft: ${var.apt_elev_ft}
+              mode: "full"   # hardcoded, deliberately not ${var.gold_mode} — that var is
+                             # shared with the separate serving-mode skywatch_gold job
+
+        - task_key: train_eta
+          depends_on:
+            - task_key: gold_full
+          notebook_task:
+            notebook_path: ../src/train_eta.py
+            base_parameters:
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              model_name: ${var.catalog}.ml.eta_touchdown
+              test_date: ${var.eta_test_date}
+              max_evals: ${var.eta_max_evals}
+              run_automl: "false"
+              ab_table_version: ""
+
+        - task_key: promote_eta
+          depends_on:
+            - task_key: train_eta
+          notebook_task:
+            notebook_path: ../src/promote_eta.py
+            base_parameters:
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              model_name: ${var.catalog}.ml.eta_touchdown
+              test_date: ${var.eta_test_date}
+              holdout_table_version: ${var.eta_holdout_table_version}
+              min_improvement_pct: ${var.eta_min_improvement_pct}
+              noise_band_pct: ${var.eta_noise_band_pct}
+              max_band_regression_min: ${var.eta_max_band_regression_min}
+              apply: "false"   # always a dry run — see the header note
+
+        - task_key: forecast_demand
+          depends_on:
+            - task_key: gold_full
+          notebook_task:
+            notebook_path: ../src/forecast_demand.py
+            base_parameters:
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              model_name: ${var.catalog}.ml.demand_forecast
+              horizon_bins: ${var.demand_horizon_bins}
+              cut_bins: ${var.demand_cut_bins}
+              run_finetune: ${var.demand_run_finetune}
+
+        - task_key: promote_demand
+          depends_on:
+            - task_key: forecast_demand
+          notebook_task:
+            notebook_path: ../src/promote_demand.py
+            base_parameters:
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              model_name: ${var.catalog}.ml.demand_forecast
+              holdout_table_version: ${var.demand_holdout_table_version}
+              cut_bins: ${var.demand_cut_bins}
+              min_improvement_pct: ${var.demand_min_improvement_pct}
+              noise_band_pct: ${var.demand_noise_band_pct}
+              max_band_regression_mase: ${var.demand_max_band_regression_mase}
+              apply: "false"   # always a dry run — see the header note
+
+      schedule:
+        quartz_cron_expression: "0 0 6 ? * MON"   # weekly, Monday 06:00 UTC
+        timezone_id: UTC
+        pause_status: ${var.retrain_pause_status}
+
+      email_notifications:
+        on_failure:
+          - ${var.notification_email}
+
+      queue:
+        enabled: true

@@ -190,10 +190,29 @@ see the notebook's header for why) → `skywatch.ml.model_health`:
   actual Alert object and picking where it notifies is your call, not automated
 
 ### Track 6 — Retraining automation
-`skywatch_retrain` workflow: `build_gold mode=full` → train → register `@challenger` → run the
-Track 4 gate. Triggers: (a) weekly schedule, (b) a drift alert from Track 5, (c) "N new backfill
-days landed". **Built + deployed PAUSED**; demonstrated once end-to-end; not left to fire
-unattended (would eventually lock out a day's Free Edition quota).
+
+**Done, 2026-09-18 — see §6a.** `skywatch_retrain` — a 5-task Databricks Job chaining
+already-verified-live notebooks unchanged: `gold_full` → `{train_eta, forecast_demand}` →
+`{promote_eta, promote_demand}` (both gates always `apply=false` — a retrain workflow that
+could auto-flip `@champion` would defeat Track 4's entire human-approval design). No new
+notebook code — purely wiring. Model 3 (`train_hold_risk.py`) deliberately excluded — it's
+permanently dormant by a settled decision, not a model that benefits from retraining.
+
+Triggers, as actually built (dev-only — staging never runs its own gold rebuild, Track 3):
+- **(a) weekly schedule** — exists (Monday 06:00 UTC), deployed **PAUSED**. Unattended weekly
+  full-gold-rebuild-plus-two-trainings would eventually eat a day's quota for no reason if
+  nothing new landed — unpause explicitly (`--var="retrain_pause_status=UNPAUSED"`) when ready.
+- **(b) a Track 5 drift alert** and **(c) new backfill days landed** — both are the same manual
+  trigger (`databricks bundle run skywatch_retrain -t dev`), by design: the division of labour
+  already says "trigger a drift-driven retrain once," i.e. a human decides when to act on a
+  signal, not a fully-automated closed loop from an alert straight into a retrain.
+
+**Demonstrated once, fully live** (not just deployed): ran the whole 5-task chain end to end
+(~8.7 min) — both gates correctly returned `PASS` on real new candidates, and both `@champion`
+aliases stayed untouched throughout (dry run, exactly as designed). One real, non-test-artifact
+finding came out of it: the new `eta_touchdown` challenger (v9, MAE 1.139) is genuinely
+slightly better than the current champion (v7, 1.144) — a live promotion decision now sitting
+with the user, per the division of labour, not applied automatically here.
 
 ### Track 7 — Release management
 Semver tags, `CHANGELOG.md`, tag → prod deploy, documented rollback (redeploy previous tag +
@@ -230,7 +249,7 @@ substitute **and** documented as "production swaps X for Y" — itself a portfol
 | 3 Environments | create `skywatch_staging` catalog + schemas, create the CI service principal (shared prerequisite with Track 2), the read-only prod grants, first `serving_staging/` deploy | `serving_staging/` second bundle (§3), `read_stream_schema` split across the 5 train/score notebooks |
 | 4 Promotion gate | run `promote_eta` / `promote_demand` with `apply=true` when you want to act on a passing recommendation (that's the approval — see §2 Track 4) | done for both M1 and M2 (both envs) |
 | 5 Monitoring | paste the Genie Code prompt for the dashboard tile, configure the SQL Alert + notification destination, unpause `skywatch_monitor` when ready for it to run live | done: `monitor.py` (PSI / rolling-MAE / freshness), schedule, notification-email variable |
-| 6 Retraining | set the schedule, trigger a drift-driven retrain once, review the challenger PR | wire the retrain workflow + the three triggers |
+| 6 Retraining | decide on the pending v9 `eta_touchdown` promotion (real, from the verification run — see §6a), unpause the weekly schedule if/when wanted | done: retrain workflow + all three triggers, demonstrated live end-to-end |
 | 7 Release | cut a tagged release, write a changelog entry, practice one rollback | semver + release-notes convention, tag → prod path, rollback doc |
 | 8 Runbooks | write each runbook the first time you perform that operation | model cards, MLOps architecture doc, review runbooks |
 
@@ -470,6 +489,31 @@ ORDER BY checked_at DESC
 
 Trigger condition: row count > 0. Evaluation schedule should match (or trail slightly behind)
 `skywatch_monitor`'s own cadence (every 6 h) so the alert checks shortly after each run.
+
+- **2026-09-18 — Track 6 done.** `resources/skywatch.retrain.job.yml` — a 5-task job chaining
+  `build_gold.py` (mode hardcoded to `full`, deliberately not `${var.gold_mode}` — that var is
+  shared with the separate serving-mode `skywatch_gold` job) → `train_eta.py` +
+  `forecast_demand.py` → `promote_eta.py` + `promote_demand.py` (`apply` hardcoded `"false"` in
+  both — see the job's own header comment for why). No new notebook code — purely wiring
+  already-verified pieces together. `train_hold_risk.py` excluded on purpose (permanently
+  dormant).
+  - Added `retrain_pause_status` (default `PAUSED`) — its own dedicated var, not reusing
+    `poller_pause_status` or `monitor_pause_status`, so this job's schedule stays independently
+    controllable.
+  - **Ran the whole chain live**: deployed with a temporary `eta_max_evals=3` override to keep
+    the verification fast (reverted afterward — this also touches the standalone
+    `skywatch_train_eta` job's default, same shared-var caveat noted since Track 3). All 5
+    tasks `TERMINATED SUCCESS` in ~8.7 minutes. Confirmed via the registry: both gates
+    correctly evaluated real new candidates and returned `PASS`; both `@champion` aliases
+    stayed untouched throughout (dry run).
+  - **Real finding, not a test artifact**: `eta_touchdown` v9 (MAE 1.139) is genuinely slightly
+    better than the current champion v7 (1.144) — even trained with the reduced eval count.
+    Left unpromoted; the actual promote/hold call is the user's per the division of labour,
+    not something to apply unilaterally just because a verification run happened to produce a
+    real improvement.
+  - Wanted to also shrink `demand_cut_bins` for a faster M2 verification leg; discovered the
+    CLI's `--var` flag splits on comma, so a single value containing commas (`"44,68"`) can't
+    be passed that way — ran the M2 leg on its full default 5-cut backtest instead.
 
 ## 7. Relationship to the roadmap
 
