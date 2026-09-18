@@ -243,6 +243,16 @@ variables:
       plan calls for this one to actually run live (low-frequency) once you're ready for it.
     default: PAUSED
 
+  # --- Retraining automation (skywatch_retrain, Track 6) — dev-only, full gold rebuild is
+  # expensive; a weekly schedule is meaningful here in a way it isn't for the other jobs ---
+  retrain_pause_status:
+    description: >-
+      PAUSED or UNPAUSED — the weekly retrain workflow's own schedule. Deployed PAUSED —
+      full gold rebuild + two model trainings every week, unattended, would eventually eat a
+      day's Free Edition quota for no reason if nothing new landed. Meant to be run on demand
+      (after new backfill lands, or in response to a Track 5 drift alert) more than left live.
+    default: PAUSED
+
 targets:
   dev:
     mode: development
