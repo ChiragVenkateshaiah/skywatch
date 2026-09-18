@@ -5,10 +5,19 @@ name: PR checks
 # principal — see Track 3). On a PR from a fork, GitHub withholds repo secrets by design, so
 # the validate job's Databricks CLI steps will fail there; that's expected on a public repo,
 # not a bug — see docs/MLOPS_PLAN.md Track 2's SP-OAuth-first / PAT-fallback note.
+#
+# workflow_dispatch exists as a manual escape hatch: PR #32 (2026-09-16) opened with zero
+# workflow runs — no `pull_request` event fired at all, confirmed via the Actions API and
+# GitHub's public status history (no incident touched Actions/Workflows in that window; the
+# only one that day was unrelated, Copilot AI Model Providers). An isolated, undocumented
+# webhook-delivery miss, not a config bug here and not something a retry setting can catch,
+# since no run object existed to retry. Recovered that time with an empty commit; this trigger
+# is the cleaner fix — `gh workflow run "PR checks" --ref <branch>` needs no throwaway commit.
 
 on:
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   test:

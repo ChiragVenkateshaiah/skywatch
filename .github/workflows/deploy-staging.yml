@@ -5,10 +5,16 @@ name: Deploy staging
 # the root databricks.yml / dev target — that stays a manual, human-run deploy (dev is the
 # live environment this project's demo/LinkedIn post point at; promoting changes there is a
 # Track 4 (promotion gate) concern, not CI plumbing).
+#
+# workflow_dispatch is a manual escape hatch for the same class of issue documented in
+# pr-checks.yml: a push event can, rarely, never fire a workflow run at all (confirmed once,
+# 2026-09-16 — no run object existed to re-run, and no GitHub incident explained it). This
+# lets a redeploy be triggered directly instead of needing a throwaway commit to main.
 
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   deploy:
