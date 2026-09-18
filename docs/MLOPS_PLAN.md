@@ -248,8 +248,20 @@ history," not a deploy trigger.
   response to an incident).
 
 ### Track 8 — Runbooks & governance
-Runbooks (deploy, rollback, incident, retrain), model cards for M1 / M2 / M3, a promotions audit
-log, an MLOps architecture doc.
+
+**Done, 2026-09-18 — see §6a.** All four deliverables:
+- **`docs/RUNBOOKS.md`** — deploy, rollback, incident, retrain. Every procedure is the exact
+  sequence actually run and verified live somewhere in this arc, gotchas included, not a
+  theoretical write-up.
+- **`docs/MODEL_CARDS.md`** — M1/M2/M3, standard model-card shape, synthesized from `pitch.md`
+  and `docs/ML_ROADMAP.md` rather than re-derived.
+- **A real promotions audit log** (`<catalog>.ml.promotion_audit`) — not just documentation.
+  `src/lib/promotion.py::audit_row` (unit-tested) builds one row per promote-job run — model,
+  challenger version, prior champion version, gate verdict, whether it was actually applied,
+  and why — appended by both `promote_eta.py` and `promote_demand.py` regardless of outcome.
+- **`docs/MLOPS_ARCHITECTURE.md`** — the synthesized end-to-end picture (a Mermaid diagram,
+  rendered and checked before trusting it — same discipline as the root README's diagram) plus
+  the handful of decisions that shaped the whole arc, gathered in one place.
 
 ---
 
@@ -280,7 +292,7 @@ substitute **and** documented as "production swaps X for Y" — itself a portfol
 | 5 Monitoring | paste the Genie Code prompt for the dashboard tile, configure the SQL Alert + notification destination, unpause `skywatch_monitor` when ready for it to run live | done: `monitor.py` (PSI / rolling-MAE / freshness), schedule, notification-email variable |
 | 6 Retraining | decide on the pending v9 `eta_touchdown` promotion (real, from the verification run — see §6a), unpause the weekly schedule if/when wanted | done: retrain workflow + all three triggers, demonstrated live end-to-end |
 | 7 Release | cut future releases as the project grows (`git tag vX.Y.Z && git push --tags`) | done: `CHANGELOG.md`, `release.yml`, rollback doc + practiced live (both code and model) |
-| 8 Runbooks | write each runbook the first time you perform that operation | model cards, MLOps architecture doc, review runbooks |
+| 8 Runbooks | review `docs/RUNBOOKS.md` / `MODEL_CARDS.md` / `MLOPS_ARCHITECTURE.md`, extend a runbook the next time reality diverges from what's written | done: all three docs + the real `promotion_audit` table, written from procedures already run live throughout this arc |
 
 **Sequence:** Track 1 (done, §6a) → **Track 3 and Track 2 are now coupled at the service
 principal** (Track 3's `serving_staging/` `run_as` needs the same SP Track 2's CI auth needs) —
@@ -562,6 +574,21 @@ Trigger condition: row count > 0. Evaluation schedule should match (or trail sli
     correct current state — a rehearsal, not a response to a real incident).
   - Cut the actual `v1.0.0` tag marking this state (three models, the App + dashboard, Tracks
     1-6 of the MLOps arc, the real v9 promotion) — see the Release on GitHub.
+
+- **2026-09-18 — Track 8 done. All eight tracks of the MLOps arc are now complete.**
+  `docs/RUNBOOKS.md`, `docs/MODEL_CARDS.md`, `docs/MLOPS_ARCHITECTURE.md` (Mermaid diagram
+  rendered and checked with `mmdc` before trusting it, same as the root README's), and a real
+  `<catalog>.ml.promotion_audit` table — `src/lib/promotion.py::audit_row` (5 new pytest cases)
+  called from both `promote_eta.py` and `promote_demand.py`.
+  - **Verified live**: deployed, ran `promote_eta` — hit the `already_champion` early exit
+    first (v9 was already both `@champion` and `@challenger`, nothing new to audit), so trained
+    a quick new challenger (v10, `eta_max_evals=3`) specifically to exercise the write path for
+    real. Confirmed a correct row landed in `skywatch.ml.promotion_audit`: challenger 10,
+    champion-before 9, `PASS`, `applied=false`, reasons captured. `promote_demand.py`'s
+    identical wiring (same `audit_row` call, same table-write pattern) was not re-verified with
+    another full live LODO backtest — a deliberate scope call, not an oversight.
+  - Deployed the same code to `staging` (shared `src/`, so `serving_staging`'s promote jobs get
+    their own isolated `skywatch_staging.ml.promotion_audit` for free).
 
 ## 7. Relationship to the roadmap
 

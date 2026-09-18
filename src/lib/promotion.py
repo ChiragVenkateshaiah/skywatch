@@ -2,11 +2,17 @@
 so it has a real pytest suite (tests/test_promotion.py) instead of only ever being exercised
 by a live job run. `promote_eta.py` scores the challenger/champion (needs Spark + the loaded
 models) and calls `evaluate_gate` with the resulting per-band MAE dicts.
+
+`audit_row` (Track 8) builds the one-row record both `promote_eta.py` and `promote_demand.py`
+append to `<catalog>.ml.promotion_audit` on every run — win or lose, applied or not. Kept here,
+not inline in each notebook, so the two models can't drift into two different schemas.
 """
 
 from __future__ import annotations
 
+import datetime as _dt
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -58,3 +64,25 @@ def evaluate_gate(
             f"{ {k: round(v, 3) for k, v in band_regressions.items()} }"
         )
     return GateResult(passed, reasons)
+
+
+def audit_row(
+    model_name: str,
+    challenger_version: int,
+    champion_version_before: int | None,
+    gate: GateResult,
+    applied: bool,
+) -> dict[str, Any]:
+    """One row for `<catalog>.ml.promotion_audit` — an append-only record of every promote job
+    run, whether it passed, and whether it was actually applied. `champion_version_before` is
+    `None` on a bootstrap promotion (no `@champion` existed yet).
+    """
+    return {
+        "audited_at": _dt.datetime.now(_dt.timezone.utc),
+        "model_name": model_name,
+        "challenger_version": int(challenger_version),
+        "champion_version_before": None if champion_version_before is None else int(champion_version_before),
+        "gate_verdict": "PASS" if gate.passed else "HOLD",
+        "applied": bool(applied),
+        "reasons": " | ".join(gate.reasons),
+    }
