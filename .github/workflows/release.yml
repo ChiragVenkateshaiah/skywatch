@@ -1,0 +1,43 @@
+name: Release
+
+# docs/MLOPS_PLAN.md Track 7. Packages a tagged release — extracts that version's CHANGELOG.md
+# section and creates a GitHub Release from it. Deliberately does NOT deploy anything: dev is
+# the live environment and stays a manual, human-run deploy (the same decision Track 2/3 made
+# for merges to main — a tag doesn't change that). "Release" here means "a marked, documented
+# point in the project's history," not "a promotion to a separate prod environment" — there
+# isn't one, see docs/MLOPS_PLAN.md Track 3 for why.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract this version's changelog section
+        id: notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v ver="$VERSION" '
+            BEGIN { found = 0 }
+            /^## \[/ {
+              if (found) exit
+              if (index($0, "[" ver "]")) { found = 1; next }
+            }
+            found { print }
+          ' CHANGELOG.md > release_notes.md
+          if [ ! -s release_notes.md ]; then
+            echo "No CHANGELOG.md section found for [$VERSION] — falling back to a plain note." > release_notes.md
+          fi
+          cat release_notes.md
+
+      - name: Create GitHub Release
+        run: gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --notes-file release_notes.md
+        env:
+          GH_TOKEN: ${{ github.token }}

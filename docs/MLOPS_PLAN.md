@@ -215,8 +215,37 @@ slightly better than the current champion (v7, 1.144) — a live promotion decis
 with the user, per the division of labour, not applied automatically here.
 
 ### Track 7 — Release management
-Semver tags, `CHANGELOG.md`, tag → prod deploy, documented rollback (redeploy previous tag +
-`@champion` alias rollback to the prior model version).
+
+**Done, 2026-09-18 — see §6a.** Revised the "tag → prod deploy" half to match Track 3's actual
+architecture: there's no separate `prod` target to deploy to on a tag (`dev` is the live
+environment and stays a manual, human-run deploy — the same call Track 2/3 already made for
+merges to `main`). A release tag here means "a marked, documented point in the project's
+history," not a deploy trigger.
+
+- **`CHANGELOG.md`** — [Keep a Changelog](https://keepachangelog.com/) format. Starts the
+  discipline at `1.0.0`, doesn't retroactively itemize the ~120 commits before it (`git log` /
+  README "Origins" cover that history).
+- **`.github/workflows/release.yml`** — triggers on `v*` tag push, extracts that version's
+  `CHANGELOG.md` section (`awk`, tested locally against the real file before trusting it in
+  CI), creates a GitHub Release from it via `gh release create`. No deploy step.
+- **Semver convention**: MAJOR = a new model or an architecture change (e.g. the dev/staging
+  split); MINOR = a new capability (an MLOps Track, a new App panel); PATCH = a fix.
+
+**Rollback — documented and practiced, not just written down:**
+- **Code**: find the last good tag (`git tag -l`, or the Release list), then either
+  `git revert` the bad commit(s) (preferred — keeps history honest) or
+  `git checkout v<good> -- .` + a new commit if a full revert is cleaner, then the same manual
+  `databricks bundle deploy -t dev` any other change goes through.
+- **Model**: flip `@champion` back with the same registry API used live throughout Track 4/6's
+  verification runs (not a new mechanism — this project already has hands-on practice with it):
+  ```bash
+  databricks api put "/api/2.1/unity-catalog/models/<model>/aliases/champion" \
+    --json '{"version_num": <prior_good_version>}'
+  ```
+- **Practiced for real**: rolled `eta_touchdown@champion` back from v9 to v7, confirmed via the
+  registry API, then re-promoted to v9 (the actually-correct current state — v9 is a real,
+  gate-approved improvement, not a bad release; this was a rollback-mechanism rehearsal, not a
+  response to an incident).
 
 ### Track 8 — Runbooks & governance
 Runbooks (deploy, rollback, incident, retrain), model cards for M1 / M2 / M3, a promotions audit
@@ -250,7 +279,7 @@ substitute **and** documented as "production swaps X for Y" — itself a portfol
 | 4 Promotion gate | run `promote_eta` / `promote_demand` with `apply=true` when you want to act on a passing recommendation (that's the approval — see §2 Track 4) | done for both M1 and M2 (both envs) |
 | 5 Monitoring | paste the Genie Code prompt for the dashboard tile, configure the SQL Alert + notification destination, unpause `skywatch_monitor` when ready for it to run live | done: `monitor.py` (PSI / rolling-MAE / freshness), schedule, notification-email variable |
 | 6 Retraining | decide on the pending v9 `eta_touchdown` promotion (real, from the verification run — see §6a), unpause the weekly schedule if/when wanted | done: retrain workflow + all three triggers, demonstrated live end-to-end |
-| 7 Release | cut a tagged release, write a changelog entry, practice one rollback | semver + release-notes convention, tag → prod path, rollback doc |
+| 7 Release | cut future releases as the project grows (`git tag vX.Y.Z && git push --tags`) | done: `CHANGELOG.md`, `release.yml`, rollback doc + practiced live (both code and model) |
 | 8 Runbooks | write each runbook the first time you perform that operation | model cards, MLOps architecture doc, review runbooks |
 
 **Sequence:** Track 1 (done, §6a) → **Track 3 and Track 2 are now coupled at the service
@@ -514,6 +543,25 @@ Trigger condition: row count > 0. Evaluation schedule should match (or trail sli
   - Wanted to also shrink `demand_cut_bins` for a faster M2 verification leg; discovered the
     CLI's `--var` flag splits on comma, so a single value containing commas (`"44,68"`) can't
     be passed that way — ran the M2 leg on its full default 5-cut backtest instead.
+  - **v9 promoted for real, separately, after this**: the user asked directly — flipped
+    `eta_touchdown@champion` v7 → v9 via the promote job's `apply=true` path (deployed the
+    override, ran it, confirmed the flip, redeployed the safe `apply=false` default back), then
+    ran `skywatch_score_eta` so live predictions and click-to-predict's Volume export (which
+    only refreshes on a `score_eta` run) actually reflect v9 too — confirmed 48 fresh
+    predictions at `model_version=9`.
+
+- **2026-09-18 — Track 7 done.** `CHANGELOG.md` (Keep a Changelog, starts at `1.0.0` — doesn't
+  retroactively itemize the ~120 pre-changelog commits) + `.github/workflows/release.yml`
+  (triggers on `v*` tag push, extracts that version's changelog section via `awk` — tested
+  locally against the real file first — and creates a GitHub Release from it, no deploy step).
+  "Tag → prod deploy" revised to match Track 3: there's no separate `prod` target to deploy to
+  on a tag, so a release tag marks a documented point in history, not a deploy trigger.
+  - **Rollback practiced live, not just documented**: rolled `eta_touchdown@champion` back
+    v9 → v7 via the registry API (the exact mechanism used throughout Track 4/6's own
+    verification), confirmed via `aliases/champion`, then restored it to v9 (the actually-
+    correct current state — a rehearsal, not a response to a real incident).
+  - Cut the actual `v1.0.0` tag marking this state (three models, the App + dashboard, Tracks
+    1-6 of the MLOps arc, the real v9 promotion) — see the Release on GitHub.
 
 ## 7. Relationship to the roadmap
 
