@@ -152,7 +152,7 @@ display(report.round(3))
 # MAGIC `tests/test_promotion.py` rather than only ever exercised by a live job run.
 
 # COMMAND ----------
-from lib.promotion import evaluate_gate
+from lib.promotion import audit_row, evaluate_gate
 
 gate = evaluate_gate(
     challenger_bands, champion_bands, MIN_IMPROVEMENT_PCT, NOISE_BAND_PCT, MAX_BAND_REGRESSION_MIN
@@ -180,3 +180,15 @@ else:
     print(f"\nHolding @champion at v{getattr(champion_mv, 'version', '(none)')} — challenger not promoted")
     if APPLY:
         print("(apply=true was set, but a failing gate is never applied)")
+
+# COMMAND ----------
+# MAGIC %md ## 6. Promotions audit log (Track 8) — one row every run, win or lose, applied or not
+
+# COMMAND ----------
+CATALOG = STREAM.split(".")[0]
+applied = passed and APPLY
+row = audit_row(MODEL_NAME, challenger_mv.version, getattr(champion_mv, "version", None), gate, applied)
+spark.createDataFrame([row]).write.mode("append").option("mergeSchema", "true").saveAsTable(
+    f"{CATALOG}.ml.promotion_audit"
+)
+print(f"logged to {CATALOG}.ml.promotion_audit")

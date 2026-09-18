@@ -12,7 +12,8 @@ served to an arrival coordinator through a Databricks App and an AI/BI dashboard
 
 - **The pitch (no code):** [`pitch.md`](pitch.md)
 - **The full plan + Free Edition ↔ Production capability matrix:** [`docs/ML_ROADMAP.md`](docs/ML_ROADMAP.md)
-- **Production MLOps plan (next arc):** [`docs/MLOPS_PLAN.md`](docs/MLOPS_PLAN.md)
+- **Production MLOps arc (done — CI, environments, promotion gates, monitoring, retraining, releases, governance):** [`docs/MLOPS_PLAN.md`](docs/MLOPS_PLAN.md)
+- **MLOps architecture, runbooks, model cards:** [`docs/MLOPS_ARCHITECTURE.md`](docs/MLOPS_ARCHITECTURE.md) · [`docs/RUNBOOKS.md`](docs/RUNBOOKS.md) · [`docs/MODEL_CARDS.md`](docs/MODEL_CARDS.md)
 
 ---
 

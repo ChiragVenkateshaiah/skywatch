@@ -5,9 +5,11 @@ actual models and only calls evaluate_gate() with the resulting per-band MAE dic
 
 from __future__ import annotations
 
+import datetime as dt
+
 import pytest
 
-from lib.promotion import evaluate_gate
+from lib.promotion import GateResult, audit_row, evaluate_gate
 
 BANDS = ["0-20nm", "20-40nm", "40-70nm", "70-100nm", "ALL"]
 
@@ -91,3 +93,39 @@ class TestBandRegression:
         del champion[missing_band]
         result = evaluate_gate(challenger, champion, 2.0, 1.0, 0.15)
         assert result.passed
+
+
+class TestAuditRow:
+    def test_pass_and_applied(self):
+        row = audit_row("skywatch.ml.eta_touchdown", 9, 7, GateResult(True, ["ok"]), applied=True)
+        assert row["model_name"] == "skywatch.ml.eta_touchdown"
+        assert row["challenger_version"] == 9
+        assert row["champion_version_before"] == 7
+        assert row["gate_verdict"] == "PASS"
+        assert row["applied"] is True
+        assert row["reasons"] == "ok"
+        assert isinstance(row["audited_at"], dt.datetime)
+        assert row["audited_at"].tzinfo is not None
+
+    def test_pass_but_not_applied_is_a_valid_combination(self):
+        # A dry run: the gate passed, but apply=false, so nothing was actually promoted.
+        row = audit_row("m", 2, 1, GateResult(True, ["ok"]), applied=False)
+        assert row["gate_verdict"] == "PASS"
+        assert row["applied"] is False
+
+    def test_hold_forces_applied_false_in_practice_but_the_function_itself_is_honest(self):
+        # audit_row records whatever `applied` it's given — the notebooks are responsible for
+        # never passing applied=True alongside a failing gate. Verified here so a future
+        # refactor that breaks that invariant fails a test, not silently corrupts the audit log.
+        row = audit_row("m", 2, 1, GateResult(False, ["FAILS: worse"]), applied=False)
+        assert row["gate_verdict"] == "HOLD"
+        assert row["applied"] is False
+        assert "FAILS" in row["reasons"]
+
+    def test_bootstrap_has_no_prior_champion(self):
+        row = audit_row("m", 1, None, GateResult(True, ["no @champion exists yet"]), applied=True)
+        assert row["champion_version_before"] is None
+
+    def test_multiple_reasons_joined(self):
+        row = audit_row("m", 2, 1, GateResult(False, ["reason one", "reason two"]), applied=False)
+        assert row["reasons"] == "reason one | reason two"
