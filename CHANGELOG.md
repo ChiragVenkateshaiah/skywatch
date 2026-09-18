@@ -11,6 +11,25 @@ README's "Origins" section cover it. This changelog starts the discipline at 1.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-18
+
+The MLOps arc completed — all eight tracks of `docs/MLOPS_PLAN.md` done.
+
+### Added
+- Retraining automation (Track 6): `skywatch_retrain` chains a full Gold rebuild → training →
+  the promotion gate for both models in one workflow, deployed paused, demonstrated live end
+  to end (~9 min).
+- Release management (Track 7): this changelog, a tag-triggered GitHub Release workflow, and a
+  rollback procedure practiced live (both a model-alias rollback and the process for a code
+  rollback).
+- Governance (Track 8): `docs/RUNBOOKS.md`, `docs/MODEL_CARDS.md`, `docs/MLOPS_ARCHITECTURE.md`,
+  and a real `<catalog>.ml.promotion_audit` table recording every promotion decision — model,
+  challenger, prior champion, verdict, and whether it was actually applied.
+
+### Changed
+- `eta_touchdown@champion` v9 refreshed into live serving — `skywatch_score_eta` re-run so
+  predictions and click-to-predict's Volume export both reflect it.
+
 ## [1.0.0] - 2026-09-18
 
 The project at "portfolio-complete" — three models, a live App and AI/BI dashboard, and a full
