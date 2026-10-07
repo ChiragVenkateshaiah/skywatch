@@ -215,6 +215,32 @@ Dashboards are authored in **Genie Code** (agentic) and captured back to the rep
 `databricks bundle generate dashboard`. See `docs/ML_ROADMAP.md` §2.1 for the Genie-Code vs
 repo-code split.
 
+## Resuming development on a different machine
+
+This project moves between machines sometimes. Everything needed to pick it up cleanly lives in
+git — nothing is kept only on one machine, and in-progress work stays on a feature branch with
+an open PR (not `main`) until it's verified live, so the branch list itself shows what's unfinished.
+
+1. **Clone, then find the active work**: `git clone` this repo, then `git branch -r` (or
+   `gh pr list`) to see open branches/PRs — that's what's in flight.
+2. **One-time auth per machine**: `databricks auth login --profile skywatch` (interactive,
+   browser login — the workspace host is already in `databricks.yml`, see
+   [Deploy via Databricks Asset Bundle](#deploy-via-databricks-asset-bundle) above). CLI auth
+   profiles are local credentials and are deliberately never committed.
+3. **Local test env**: `pip install -r requirements-dev.txt`, plus a JDK 11/17 on `PATH` for
+   `pytest` (that file's own header comment has a no-root install method:
+   `pip install install-jdk && python -c "import jdk; jdk.install('17', jre=False)"`).
+4. **Context — fastest path for a human or a fresh assistant session with zero prior history**:
+   read `docs/ML_ROADMAP.md` (overall plan) and `docs/MLOPS_PLAN.md` (the production MLOps arc)
+   first. Any `docs/*_PLAN.md` doc's own **Progress log** section at the bottom is the
+   up-to-the-minute checkpoint for in-progress work, written so a session that's never seen the
+   conversation history can resume without re-deriving context.
+
+**Currently in flight (as of 2026-10-07):** branch `ml/m1-transformer-variant`, PR #39 open —
+a Transformer-encoder variant of Model 1, evaluated for real through the existing promotion
+gate. Exact pending next step (an OAuth re-login, then a live job retry) is in
+`docs/M1_TRANSFORMER_PLAN.md` §6 — trust that Progress log over this paragraph once it's stale.
+
 ## Historical backfill (Model training data)
 
 `readsb-hist` only has the **1st of each month**. Downloading it on serverless would blow the
