@@ -71,4 +71,46 @@ closes.
 - **2026-09-24 — code complete, local tests pass.** `src/lib/sequences.py` +
   `tests/test_sequences.py` (9/9 pass locally). `src/eta_sequences.py`, `src/train_eta_transformer.py`,
   `promote_eta.py`'s `model_flavor` branch, and the new job resource all written per §3 above.
+  Also ran a local synthetic smoke test (no Spark/Databricks) of the Transformer forward/backward
+  pass and the flatten/unflatten window round-trip — shapes, masking, and one training step all
+  correct before spending live compute. PR #39 open on `ml/m1-transformer-variant`, not merged.
   Live verification (train job run, promote gate run against the real workspace) next.
+
+- **2026-09-24/25 — live verification attempt #1: failed, platform-side.** `bundle deploy -t dev`
+  succeeded (new job `skywatch_train_eta_transformer` created). `bundle run skywatch_train_eta_transformer
+  -t dev` executed for real — task ran ~100 minutes (cluster setup was 4s, not the bottleneck),
+  then terminated `INTERNAL_ERROR`: *"The service encountered a transient issue. Retry the run,
+  or contact Databricks support if the issue persists."* No notebook stdout was captured via the
+  Jobs API, so it's unknown whether this hit near the end (e.g. during `mlflow.pyfunc.log_model`'s
+  artifact upload) or earlier. Databricks run id `956016922336320` / task run id
+  `1006766208315228`, job id `816953901790321`, if re-checking the UI directly.
+  **Not yet resolved whether this was a genuine one-off platform blip or the training loop is
+  just slow on serverless CPU** — 100 min for ~90 epochs total (two-stage fit) isn't absurd for a
+  constrained shared CPU, but it's slower than expected. Worth watching on the next attempt.
+
+- **2026-10-07 — live verification attempt #2: blocked, not a code issue.** Retried per plan
+  (`databricks auth login`'s refresh token had gone stale after ~12 idle days — the same
+  known Free Edition OAuth lifetime issue hit during the original MLOps arc). `bundle run` failed
+  immediately with `invalid_grant: Refresh token is invalid` — never reached the job at all.
+  **Needs a human to run `databricks auth login --profile skywatch` interactively** (browser
+  login) before any further live step on this model can proceed — not something resolvable from
+  a non-interactive session on any machine.
+
+  **Development is moving to a second machine at this point.** Nothing is uncommitted or
+  unpushed — `ml/m1-transformer-variant` (commit `8ebaf52`) is fully pushed to origin, PR #39 is
+  open, and this doc is the checkpoint. **Exact next step on whichever machine continues:**
+  1. `databricks auth login --profile skywatch` (interactive, one-time per machine — CLI auth
+     profiles are local and are *not* carried by git; see this repo's README/`docs/RUNBOOKS.md`
+     for profile setup if the profile itself doesn't exist yet on the new machine).
+  2. `databricks bundle run skywatch_train_eta_transformer -t dev --profile skywatch` — watch
+     whether it completes faster/cleanly this time; if it hits `INTERNAL_ERROR` again, that
+     stops looking like a one-off and starts looking like a real performance problem worth
+     profiling (candidate suspects: `src/eta_sequences.py`'s per-segment Python loop via
+     `lib.sequences.causal_windows`, or just CPU-constrained `nn.TransformerEncoder` on
+     serverless — neither has been profiled yet).
+  3. On success: `databricks bundle run skywatch_promote_eta -t dev --profile skywatch` (dry
+     run, default `apply=false`) — confirms the `model_flavor` branch loads both flavors
+     correctly and produces a real PASS/HOLD verdict + `promotion_audit` row.
+  4. Only then: decide whether to merge PR #39 (a HOLD verdict is a legitimate, complete result
+     on its own per §4's scope boundary — it doesn't block merging, since the deliverable is the
+     real evaluation, not a win).
