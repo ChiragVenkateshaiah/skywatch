@@ -1,0 +1,26 @@
+# SkyWatch — Model 1 Transformer variant training job (docs/M1_TRANSFORMER_PLAN.md).
+# Serverless, on demand:  databricks bundle run skywatch_train_eta_transformer -t dev
+# Registers a @challenger on the SAME skywatch.ml.eta_touchdown model as skywatch_train_eta —
+# run skywatch_promote_eta afterwards to evaluate it against @champion through the real gate.
+
+resources:
+  jobs:
+    skywatch_train_eta_transformer:
+      name: skywatch-train-eta-transformer
+      max_concurrent_runs: 1
+      timeout_seconds: 7200
+      tags:
+        project: skywatch
+        component: ml
+
+      tasks:
+        - task_key: train
+          notebook_task:
+            notebook_path: ../src/train_eta_transformer.py
+            base_parameters:
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              model_name: ${var.catalog}.ml.eta_touchdown
+              test_date: ${var.eta_test_date}
+
+      queue:
+        enabled: true
