@@ -155,3 +155,63 @@ closes.
   thin early-stopping signal for stage 1's epoch calibration. Same split scheme as
   `train_eta.py`, so the gate comparison stays like-for-like; revisit if the epoch count looks
   noisy. **Next:** redeploy, attempt #5.
+
+- **2026-10-12 — live verification attempt #5: trained, registered, gated → HOLD.** Redeployed
+  with the scaler fix (`61c4a4a`), run id `152281981271006`: `SUCCESS` in ~41 min end to end.
+  Registered as `skywatch.ml.eta_touchdown` **v11**, set `@challenger` (`@champion` stays v9,
+  LightGBM). MLflow run `e01ffc1c601e4b38b02758d8cdf8b03d`.
+
+  | Test MAE (min) | 0–20nm | 20–40nm | 40–70nm | 70–100nm | ALL |
+  |---|---|---|---|---|---|
+  | Transformer v11 | 0.87 | 1.10 | 1.45 | 1.71 | 1.19 |
+  | LightGBM v9 (champion) | 0.78 | 1.04 | 1.41 | 1.73 | 1.14 |
+
+  Gate dry run (`skywatch_promote_eta`, `apply=false`, run `1057526847745553`) loaded both
+  flavors through the `model_flavor` branch and wrote a real `promotion_audit` row:
+  **HOLD** — *"overall MAE 1.190 vs champion 1.139 (-4.5%) | FAILS: worse than champion by more
+  than the 1.0% noise band and short of the 2.0% improvement bar"*. The end-to-end path (§3) is
+  now verified live.
+
+  **Caveat on the result:** `n_epochs_final = 1`. Stage 1's best validation MAE came at epoch 1
+  on the 61-row / 5-arrival validation day (the open item from attempt #4), so stage 2 refit for
+  `max(1, round(1 * 1.15)) = 1` epoch. The HOLD is real, but it is a one-epoch Transformer
+  against a tuned LightGBM — not yet a fair test of the architecture. Also noted:
+  `train_model` keeps `model.state_dict()` by reference (`best_state` tracks the live weights,
+  not a snapshot). Harmless today — stage 1's state is discarded and stage 2 wants the last
+  state — but wrong if the returned state is ever used. **Next:** decide whether to give the
+  Transformer a fairer epoch budget before closing the arc, or merge PR #39 with HOLD as the result.
+
+- **2026-10-12 — live verification attempt #6: 10-epoch floor → HOLD, and worse than 1 epoch.**
+  Changes: `train_model` now snapshots the best state with `copy.deepcopy(model.state_dict())`;
+  new `min_epochs` widget (default 10) floors the stage-2 budget at
+  `max(MIN_EPOCHS, round(best_epoch * 1.15))`; per-epoch `stage{1,2}_train_mae`,
+  `stage1_val_mae` and `stage{1,2}_epoch_seconds` go to MLflow (the Jobs API returns no
+  serverless notebook stdout, so this is the only per-epoch record); job timeout 2h → 3h.
+  Run id `663449468559033`, `SUCCESS` in ~89 min. Registered **v12**, now `@challenger`.
+  MLflow run `2e9b23d218ff408193058a6ff200933f`.
+
+  | Epoch | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | stage 1 train MAE | 1.63 | 1.24 | 1.20 | 1.17 | 1.15 | 1.14 | | | | |
+  | stage 1 val MAE (61 rows) | **1.00** | 1.24 | 1.38 | 1.30 | 1.18 | 1.09 | | | | |
+  | stage 2 train MAE | 1.69 | 1.24 | 1.20 | 1.17 | 1.15 | 1.13 | 1.12 | 1.11 | 1.10 | 1.09 |
+
+  ~5.3 min/epoch on serverless CPU (310–349 s), flat across epochs — 16 epochs ≈ 85 min.
+
+  | Test MAE (min) | 0–20nm | 20–40nm | 40–70nm | 70–100nm | ALL |
+  |---|---|---|---|---|---|
+  | Transformer v12 (10 epochs) | 0.93 | 1.16 | 1.55 | 1.81 | 1.27 |
+  | Transformer v11 (1 epoch) | 0.87 | 1.10 | 1.45 | 1.71 | 1.19 |
+  | LightGBM v9 (champion) | 0.78 | 1.04 | 1.41 | 1.73 | 1.14 |
+
+  Gate dry run (run `252049550373023`): **HOLD** — *"overall MAE 1.268 vs champion 1.139
+  (-11.3%) | FAILS: worse than champion by more than the 1.0% noise band and short of the 2.0%
+  improvement bar"*.
+
+  **Reading:** the attempt-#5 caveat ("a 1-epoch Transformer loses") is answered. Training
+  longer lowered train MAE (1.69 → 1.09) but *raised* test-day MAE (1.19 → 1.27), in every band
+  except 70–100nm. That is overfitting to the training days, not under-training — the
+  architecture, at this data scale and with no regularisation tuning, does not generalise to the
+  held-out day as well as LightGBM. One seed per run, so the 1.19 vs 1.27 gap is indicative, not
+  measured variance; the direction against the champion (both runs HOLD, by 4.5% and 11.3%) is
+  consistent. The HOLD stands as the arc's result. `@champion` stays v9; nothing was applied.

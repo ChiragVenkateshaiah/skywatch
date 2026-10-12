@@ -33,6 +33,7 @@ try:
     dbutils.widgets.text("test_date", "2026-09-01")
     dbutils.widgets.text("epochs", "40")
     dbutils.widgets.text("patience", "5")
+    dbutils.widgets.text("min_epochs", "10")
     dbutils.widgets.text("batch_size", "256")
     dbutils.widgets.text("learning_rate", "0.001")
     dbutils.widgets.text("d_model", "64")
@@ -44,6 +45,7 @@ try:
     TEST_DATE = dbutils.widgets.get("test_date")
     EPOCHS = int(dbutils.widgets.get("epochs"))
     PATIENCE = int(dbutils.widgets.get("patience"))
+    MIN_EPOCHS = int(dbutils.widgets.get("min_epochs"))
     BATCH_SIZE = int(dbutils.widgets.get("batch_size"))
     LEARNING_RATE = float(dbutils.widgets.get("learning_rate"))
     D_MODEL = int(dbutils.widgets.get("d_model"))
@@ -53,6 +55,7 @@ except Exception:
     STREAM, MODEL_NAME, TEST_DATE = "skywatch.stream", "skywatch.ml.eta_touchdown", "2026-09-01"
     READ_STREAM = STREAM
     EPOCHS, PATIENCE, BATCH_SIZE, LEARNING_RATE = 40, 5, 256, 0.001
+    MIN_EPOCHS = 10
     D_MODEL, NHEAD, NUM_LAYERS = 64, 4, 2
 
 print(f"train set: {READ_STREAM}.gold_arrival_tracks | test day: {TEST_DATE} | model: {MODEL_NAME}")
@@ -142,7 +145,9 @@ print({k: round(v, 3) for k, v in baseline_bands.items()})
 # MAGIC %md ## 4. Transformer encoder over the causal window
 
 # COMMAND ----------
+import copy
 import math
+import time
 
 import torch
 from torch import nn
@@ -235,13 +240,14 @@ def make_loader(df, shuffle):
     return DataLoader(TensorDataset(cont, phase_idx, mask, y), batch_size=BATCH_SIZE, shuffle=shuffle)
 
 
-def train_model(train_df, val_df, max_epochs, patience):
+def train_model(train_df, val_df, max_epochs, patience, stage):
     """`val_df=None` trains for exactly `max_epochs` with no early stopping and no per-epoch
     validation (stage 2 — `val_df` is folded into `train_df` by then, so evaluating against it
     again would be a leak, same reason `train_eta.py`'s stage-2 LightGBM refit passes no
     `eval_set`). Otherwise trains with early stopping on `val_df`.
     Returns `(best_state_dict, best_epoch, best_val_mae)` — `best_val_mae` is `nan` when
-    `val_df=None`.
+    `val_df=None`. Per-epoch MAE and wall time go to the active MLflow run under `stage`
+    (the Jobs API returns no notebook stdout for serverless runs, so this is the only record).
     """
     model = EtaTransformer(**MODEL_CONFIG)
     model.set_scaler(FEAT_MEAN, FEAT_STD)
@@ -251,18 +257,24 @@ def train_model(train_df, val_df, max_epochs, patience):
 
     best_val, best_epoch, best_state, bad_epochs = float("inf"), 0, None, 0
     for epoch in range(1, max_epochs + 1):
+        t0 = time.time()
         train_mae = run_epoch(model, train_loader, optimizer)
+        mlflow.log_metrics({f"{stage}_train_mae": train_mae,
+                            f"{stage}_epoch_seconds": time.time() - t0}, step=epoch)
         if not math.isfinite(train_mae):
             # one NaN step poisons every weight; fail in minutes, not after the full budget.
             raise RuntimeError(f"non-finite train MAE ({train_mae}) at epoch {epoch}")
         if val_loader is None:
             print(f"  epoch {epoch:>3}  train MAE {train_mae:.3f}")
-            best_epoch, best_state = epoch, model.state_dict()
+            # state_dict() returns live references to the weights — snapshot it, or the
+            # "best" state silently tracks every later optimizer step.
+            best_epoch, best_state = epoch, copy.deepcopy(model.state_dict())
             continue
         val_mae = run_epoch(model, val_loader)
+        mlflow.log_metric(f"{stage}_val_mae", val_mae, step=epoch)
         print(f"  epoch {epoch:>3}  train MAE {train_mae:.3f}  val MAE {val_mae:.3f}")
         if val_mae < best_val:
-            best_val, best_epoch, best_state, bad_epochs = val_mae, epoch, model.state_dict(), 0
+            best_val, best_epoch, best_state, bad_epochs = val_mae, epoch, copy.deepcopy(model.state_dict()), 0
         else:
             bad_epochs += 1
             if bad_epochs >= patience:
@@ -286,18 +298,24 @@ with mlflow.start_run(run_name="eta_transformer") as run:
     mlflow.log_params({
         "d_model": D_MODEL, "nhead": NHEAD, "num_layers": NUM_LAYERS,
         "batch_size": BATCH_SIZE, "learning_rate": LEARNING_RATE, "seq_len": SEQ_LEN,
+        "min_epochs": MIN_EPOCHS,
     })
 
     print("stage 1 — calibrating epoch count on the validation day")
-    _, best_epoch, best_val_mae = train_model(train, val, EPOCHS, PATIENCE)
-    n_final_epochs = max(1, round(best_epoch * 1.15))
-    mlflow.log_metrics({"best_val_mae": best_val_mae, "n_epochs_final": n_final_epochs})
+    _, best_epoch, best_val_mae = train_model(train, val, EPOCHS, PATIENCE, stage="stage1")
+    # floor the refit budget: the validation day is thin (61 rows / 5 arrivals on 2026-09-14),
+    # and attempt #5 picked epoch 1 off it -> a 1-epoch final model. LightGBM's own early stop
+    # had ~100 rounds of signal to choose from; one noisy epoch isn't a fair calibration.
+    n_final_epochs = max(MIN_EPOCHS, round(best_epoch * 1.15))
+    mlflow.log_metrics({"best_val_mae": best_val_mae, "best_epoch": best_epoch,
+                        "n_epochs_final": n_final_epochs})
     print(f"best val MAE = {best_val_mae:.3f} min at epoch {best_epoch} -> "
           f"refitting for {n_final_epochs} epochs on train+val")
 
     print("stage 2 — refit on train+val, no early stopping")
     trainval = pd.concat([train, val])
-    final_state, _, _ = train_model(trainval, None, n_final_epochs, patience=n_final_epochs)
+    final_state, _, _ = train_model(trainval, None, n_final_epochs, patience=n_final_epochs,
+                                    stage="stage2")
 
     final_model = EtaTransformer(**MODEL_CONFIG)
     final_model.load_state_dict(final_state)
