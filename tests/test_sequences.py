@@ -9,8 +9,10 @@ import pytest
 from lib.sequences import (
     SEQ_LEN,
     causal_windows,
+    fit_feature_scaler,
     flatten_windows,
     phase_to_index,
+    scale_features,
     unflatten_windows,
 )
 
@@ -85,3 +87,34 @@ class TestPhaseToIndex:
         idx = phase_to_index(["bogus", None, "unknown"], self.CATEGORIES)
         unknown_idx = self.CATEGORIES.index("unknown")
         assert (idx == unknown_idx).all()
+
+
+class TestFeatureScaler:
+    def test_fits_on_current_report_only(self):
+        # a 3-report arrival: earlier reports reappear in later windows, but each counts once.
+        windows, _ = causal_windows(np.array([[1.0], [2.0], [9.0]]))
+        mean, std = fit_feature_scaler(windows)
+        assert mean[0] == pytest.approx(4.0)
+        assert std[0] == pytest.approx(np.std([1.0, 2.0, 9.0]))
+
+    def test_ignores_nan(self):
+        windows, _ = causal_windows(np.array([[1.0], [np.nan], [3.0]]))
+        mean, std = fit_feature_scaler(windows)
+        assert mean[0] == pytest.approx(2.0)
+        assert std[0] == pytest.approx(1.0)
+
+    def test_constant_and_all_nan_columns_get_unit_std(self):
+        feats = np.array([[5.0, np.nan], [5.0, np.nan]])
+        mean, std = fit_feature_scaler(causal_windows(feats)[0])
+        assert np.all(np.isfinite(mean)) and np.all(np.isfinite(std))
+        assert std.tolist() == [1.0, 1.0]
+
+    def test_scale_fills_missing_with_zero(self):
+        feats = np.array([[1.0, 10.0], [np.nan, 20.0], [3.0, np.inf]])
+        windows, _ = causal_windows(feats)
+        mean, std = fit_feature_scaler(causal_windows(feats[:2])[0])
+        scaled = scale_features(windows, mean, std)
+        assert np.all(np.isfinite(scaled))
+        assert scaled[2, -2, 0] == 0.0  # the NaN report, seen from row 2's window -> mean
+        assert scaled[2, -1, 1] == 0.0  # inf -> 0
+        assert scaled[1, -2, 0] == pytest.approx((1.0 - mean[0]) / std[0])

@@ -131,3 +131,27 @@ closes.
   ≈157 min (extrapolated from 300 segments — over the 120 min limit), new 42 s; outputs identical
   on the 300-segment sample. 81/81 tests pass. `promote_eta.py` uses the same builder, so the gate
   step benefited too. **Next:** redeploy, attempt #4 — first time real training time is observed.
+
+- **2026-10-12 — live verification attempt #4: data build fixed, training NaN from epoch 1.**
+  Redeployed with the frame-build fix (`5a055ae`), run id `797709381635769`. The frame step now
+  completes (461,052 rows / 22,665 arrivals; split train 438,410 / val 61 / test 22,581 rows),
+  but every train and val MAE was `nan` from epoch 1; the run then failed after 68 min with
+  `ValueError: Input contains NaN` in the test-day `by_band`. Cause: the Transformer took raw
+  `ETA_FEATURES` with no null handling and no scaling. Counted on `gold_arrival_tracks` (479,624
+  rows): `turn_rate_dps` 24,882 nulls, `closure_kt` 24,351, `sel_altitude_ft` 5,165, a few more in
+  `heading_err_deg`/`gs_kt`/`vrate_fpm`. LightGBM handles NaN natively, so the champion never hit
+  this; in PyTorch one NaN batch poisons every weight on the first `optimizer.step()`.
+
+  **Fix:** `lib.sequences.fit_feature_scaler` / `scale_features` (numpy, unit tested — 4 new
+  cases) fit per-feature mean/std on the **train split only** (last window position = each row's
+  own report, NaN-aware, std→1 for constant/all-NaN columns). `EtaTransformer` holds them as
+  `register_buffer`s — saved in the state_dict, so the pyfunc wrapper and `promote_eta.py` need no
+  change — and `forward()` standardises then maps NaN/inf → 0 (= the train mean). `train_model`
+  now raises on a non-finite train MAE so a bad run fails in minutes. Local smoke test of the
+  notebook's own model/training cells on synthetic data with ~5% NaNs and real-like magnitudes:
+  finite, falling loss; finite predictions; buffers round-trip through the state_dict.
+
+  **Open, not changed here:** the validation day (2026-09-14) is only 61 rows / 5 arrivals — a
+  thin early-stopping signal for stage 1's epoch calibration. Same split scheme as
+  `train_eta.py`, so the gate comparison stays like-for-like; revisit if the epoch count looks
+  noisy. **Next:** redeploy, attempt #5.

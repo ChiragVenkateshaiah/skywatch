@@ -9,6 +9,8 @@ this variant ever needs it) live scoring — no train/serve drift, same pattern 
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 
 SEQ_LEN = 24  # covers the mean (~19) and the large majority of the 25,084 arrival segments;
@@ -76,3 +78,31 @@ def phase_to_index(phases, categories: list[str]) -> np.ndarray:
     lookup = {c: i for i, c in enumerate(categories)}
     unknown_idx = lookup.get("unknown", 0)
     return np.array([lookup.get(p, unknown_idx) for p in phases], dtype=np.int64)
+
+
+def fit_feature_scaler(windows: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per-feature `(mean, std)` for standardising the Transformer's continuous inputs.
+
+    `windows`: (N, SEQ_LEN, F) from `causal_windows` / `unflatten_windows`. Fitted on the last
+    position only — that is each row's own current report, always real (never padding), so every
+    report counts once instead of up to SEQ_LEN times. NaN-aware: `closure_kt`, `turn_rate_dps`
+    and `sel_altitude_ft` are null on ~1-5% of gold rows (LightGBM handles that natively; a
+    neural net doesn't). A constant or all-NaN feature gets std 1, so scaling never divides by 0.
+    Call it on the **train split only** — the stats ship inside the model's state_dict.
+    """
+    current = np.asarray(windows, dtype=np.float64)[:, -1, :]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN column -> nan, handled below
+        mean = np.nanmean(current, axis=0)
+        std = np.nanstd(current, axis=0)
+    mean = np.where(np.isfinite(mean), mean, 0.0)
+    std = np.where(np.isfinite(std) & (std > 0), std, 1.0)
+    return mean.astype(np.float32), std.astype(np.float32)
+
+
+def scale_features(continuous: np.ndarray, mean: np.ndarray, std: np.ndarray) -> np.ndarray:
+    """Standardise, then fill missing values with 0 (= the train mean after scaling). The numpy
+    reference for `EtaTransformer.forward`'s torch version — tested here, mirrored there.
+    """
+    scaled = (np.asarray(continuous, dtype=np.float32) - mean) / std
+    return np.nan_to_num(scaled, nan=0.0, posinf=0.0, neginf=0.0)

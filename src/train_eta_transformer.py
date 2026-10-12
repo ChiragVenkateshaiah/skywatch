@@ -142,14 +142,24 @@ print({k: round(v, 3) for k, v in baseline_bands.items()})
 # MAGIC %md ## 4. Transformer encoder over the causal window
 
 # COMMAND ----------
+import math
+
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from lib.sequences import SEQ_LEN, unflatten_windows
+from lib.sequences import SEQ_LEN, fit_feature_scaler, unflatten_windows
 
 torch.manual_seed(42)
 N_PHASE = len(PHASE_CATEGORIES)
+
+# Standardisation stats for the continuous inputs, fitted on the train split only (never val or
+# the test day). Read off the last window position — each row's own current report — so the
+# full (N, SEQ_LEN, F) tensor isn't materialised just for this. Raw inputs carry nulls
+# (`closure_kt`/`turn_rate_dps` ~5%, `sel_altitude_ft` ~1%) and unscaled magnitudes (`alt_ft` in
+# the tens of thousands): attempt #4 trained on them as-is and every loss was NaN from epoch 1.
+_last = [f"seq_{(SEQ_LEN - 1) * (N_SEQ_FEATURES + 1) + j}" for j in range(N_SEQ_FEATURES - 1)]
+FEAT_MEAN, FEAT_STD = fit_feature_scaler(train[_last].to_numpy(dtype=np.float32)[:, None, :])
 
 
 def to_tensors(df):
@@ -175,8 +185,20 @@ class EtaTransformer(nn.Module):
         )
         self.encoder = nn.TransformerEncoder(layer, num_layers=num_layers)
         self.head = nn.Sequential(nn.Linear(d_model, 32), nn.ReLU(), nn.Linear(32, 1))
+        # buffers, not parameters: saved in the state_dict (so the pyfunc wrapper and
+        # promote_eta.py get them for free), never touched by the optimizer.
+        self.register_buffer("feat_mean", torch.zeros(n_continuous))
+        self.register_buffer("feat_std", torch.ones(n_continuous))
+
+    def set_scaler(self, mean, std):
+        self.feat_mean.copy_(torch.as_tensor(mean))
+        self.feat_std.copy_(torch.as_tensor(std))
 
     def forward(self, continuous, phase_idx, mask):
+        # torch mirror of lib.sequences.scale_features: standardise, missing -> 0 (= train mean).
+        continuous = torch.nan_to_num(
+            (continuous - self.feat_mean) / self.feat_std, nan=0.0, posinf=0.0, neginf=0.0
+        )
         x = torch.cat([continuous, self.phase_embed(phase_idx)], dim=-1)
         x = self.input_proj(x) + self.pos_embed
         # our windowing (src/lib/sequences.py) always puts the current report at the last
@@ -222,6 +244,7 @@ def train_model(train_df, val_df, max_epochs, patience):
     `val_df=None`.
     """
     model = EtaTransformer(**MODEL_CONFIG)
+    model.set_scaler(FEAT_MEAN, FEAT_STD)
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
     train_loader = make_loader(train_df, shuffle=True)
     val_loader = make_loader(val_df, shuffle=False) if val_df is not None else None
@@ -229,6 +252,9 @@ def train_model(train_df, val_df, max_epochs, patience):
     best_val, best_epoch, best_state, bad_epochs = float("inf"), 0, None, 0
     for epoch in range(1, max_epochs + 1):
         train_mae = run_epoch(model, train_loader, optimizer)
+        if not math.isfinite(train_mae):
+            # one NaN step poisons every weight; fail in minutes, not after the full budget.
+            raise RuntimeError(f"non-finite train MAE ({train_mae}) at epoch {epoch}")
         if val_loader is None:
             print(f"  epoch {epoch:>3}  train MAE {train_mae:.3f}")
             best_epoch, best_state = epoch, model.state_dict()
