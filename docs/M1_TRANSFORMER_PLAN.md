@@ -114,3 +114,20 @@ closes.
   4. Only then: decide whether to merge PR #39 (a HOLD verdict is a legitimate, complete result
      on its own per §4's scope boundary — it doesn't block merging, since the deliverable is the
      real evaluation, not a win).
+
+- **2026-10-11/12 — live verification attempt #3: timed out, root cause found (our code).**
+  Re-authed on the new machine, ran `bundle run skywatch_train_eta_transformer -t dev` (run id
+  `165882139007389`). Hit the job's 2h `timeout_seconds` → `TIMEDOUT`. The only stdout line was
+  the opening `train set: ...` print — the next print, right after `build_sequence_frame()`, never
+  appeared, so **training never started**: the whole 2h went into building the input frame. Cause:
+  `src/eta_sequences.py` assigned the 456 `seq_*` columns onto a pandas chunk per segment
+  (`chunk[seq_cols] = flat`, 25,084 segments → ~11M single-column inserts; 52 `PerformanceWarning:
+  DataFrame is highly fragmented` lines in the log). Almost certainly attempt #1's ~100 min failure
+  too — it was never "slow Transformer on serverless CPU". (Jobs API reports attempt #1's run as
+  `CANCELED`, not `INTERNAL_ERROR` as logged above; doesn't change the diagnosis.)
+
+  **Fix:** windows built per segment in numpy over contiguous `seg_id` slices, wide frame assembled
+  once. Local benchmark on synthetic data at real volume (25,084 segments, ~20 reports each): old
+  ≈157 min (extrapolated from 300 segments — over the 120 min limit), new 42 s; outputs identical
+  on the 300-segment sample. 81/81 tests pass. `promote_eta.py` uses the same builder, so the gate
+  step benefited too. **Next:** redeploy, attempt #4 — first time real training time is observed.

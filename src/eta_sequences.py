@@ -53,13 +53,19 @@ def build_sequence_frame(sdf):
     pdf["phase_idx"] = phase_to_index(pdf["phase"].astype(str), PHASE_CATEGORIES)
 
     seq_cols = [f"seq_{i}" for i in range(SEQ_LEN * (N_SEQ_FEATURES + 1))]
-    out_chunks = []
-    for _seg_id, group in pdf.groupby("seg_id", sort=False):
-        feats = group[SEQ_FEATURE_COLUMNS].to_numpy(dtype=np.float32)
-        windows, mask = causal_windows(feats)
-        flat = flatten_windows(windows, mask)
-        chunk = group[["seg_id", "obs_date", ETA_TARGET, "dist_to_apt_nm", "gs_kt"]].copy()
-        chunk[seq_cols] = flat
-        out_chunks.append(chunk)
+    # Windows are built per segment in numpy and the wide frame is assembled once at the end.
+    # Assigning the ~456 seq columns onto a pandas chunk per segment (25k segments) inserted
+    # columns one at a time and timed the training job out at 2h before training even started.
+    pdf = pdf.reset_index(drop=True)
+    feats = pdf[SEQ_FEATURE_COLUMNS].to_numpy(dtype=np.float32)
+    seg_ids = pdf["seg_id"].to_numpy()
+    # pdf is sorted by seg_id, so each segment is one contiguous [start, end) slice.
+    bounds = np.flatnonzero(seg_ids[1:] != seg_ids[:-1]) + 1
+    starts = np.concatenate([[0], bounds])
+    ends = np.concatenate([bounds, [len(pdf)]])
+    flat = np.concatenate(
+        [flatten_windows(*causal_windows(feats[s:e])) for s, e in zip(starts, ends)]
+    ) if len(pdf) else np.zeros((0, len(seq_cols)), dtype=np.float32)
 
-    return pd.concat(out_chunks, axis=0).reset_index(drop=True)
+    meta = pdf[["seg_id", "obs_date", ETA_TARGET, "dist_to_apt_nm", "gs_kt"]]
+    return pd.concat([meta, pd.DataFrame(flat, columns=seq_cols)], axis=1)
