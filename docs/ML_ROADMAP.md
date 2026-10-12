@@ -787,5 +787,11 @@ architecture rather than replacing it.
 
 **Open:**
 - **M2 model:** Chronos-Bolt vs Moirai vs TimesFM — decide after the zero-shot baseline bake-off.
-- **M1 v2:** also build the sequence-model (Transformer) variant to show that path, or leave it documented?
-- **Paid workspace:** when (if at all) do we cross over for the production demo?
+- **Paid workspace:** off the table for now (decided 2026-09-24) — planning stays Free Edition only.
+
+**Resolved (2026-09-24):**
+- **M1 v2:** building the Transformer variant — see `docs/M1_TRANSFORMER_PLAN.md`. Trains,
+  registers, and gates for real through the existing promotion infrastructure (same registered
+  model, same gate, same audit log); live serving is a fast-follow only if it actually wins.
+- **Next queued arc:** an LLM ops-briefing (Free Edition Foundation Model API, documented
+  fallback if quota/capacity gates it) — after the Transformer arc closes.

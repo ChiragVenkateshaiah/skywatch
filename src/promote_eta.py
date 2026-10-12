@@ -20,9 +20,16 @@
 # MAGIC    that deliberate re-trigger, by a human who read the report, *is* the approval. If no
 # MAGIC    `@champion` exists yet (first run ever for this model), the gate auto-passes: there is
 # MAGIC    nothing to regress against.
+# MAGIC
+# MAGIC **Loader is architecture-agnostic** (docs/M1_TRANSFORMER_PLAN.md): each model version
+# MAGIC carries a `model_flavor` tag (`"lightgbm"` if absent — every version registered before
+# MAGIC this tag existed). `lightgbm` loads via the native flavor (it needs `phase` as a pandas
+# MAGIC `Categorical`, which pyfunc's schema enforcement rejects — see `score_eta.py`); anything
+# MAGIC else loads via generic `mlflow.pyfunc`. The gate math itself (`evaluate_gate`, `by_band`)
+# MAGIC doesn't change — it only ever sees predictions + actuals + distance.
 
 # COMMAND ----------
-# MAGIC %pip install -q lightgbm
+# MAGIC %pip install -q lightgbm torch --extra-index-url https://download.pytorch.org/whl/cpu
 # MAGIC %restart_python
 
 # COMMAND ----------
@@ -56,7 +63,7 @@ print(f"{MODEL_NAME} | holdout day {TEST_DATE} | table version "
       f"{HOLDOUT_VERSION or 'current'} | apply={APPLY}")
 
 # COMMAND ----------
-# MAGIC %run ./eta_features
+# MAGIC %run ./eta_sequences
 
 # COMMAND ----------
 # MAGIC %md ## 1. Load challenger + champion (if one exists)
@@ -68,16 +75,31 @@ from mlflow import MlflowClient
 mlflow.set_registry_uri("databricks-uc")
 client = MlflowClient()
 
+FLAVOR_TRANSFORMER = "pytorch_transformer"
+
+
+def flavor_of(mv):
+    return (mv.tags or {}).get("model_flavor", "lightgbm") if mv is not None else None
+
+
+def load_by_flavor(uri, flavor):
+    if flavor == FLAVOR_TRANSFORMER:
+        return mlflow.pyfunc.load_model(uri)
+    return mlflow.lightgbm.load_model(uri)
+
+
 challenger_mv = client.get_model_version_by_alias(MODEL_NAME, "challenger")
-challenger = mlflow.lightgbm.load_model(f"models:/{MODEL_NAME}@challenger")
-print(f"challenger: v{challenger_mv.version}")
+challenger_flavor = flavor_of(challenger_mv)
+challenger = load_by_flavor(f"models:/{MODEL_NAME}@challenger", challenger_flavor)
+print(f"challenger: v{challenger_mv.version} (model_flavor={challenger_flavor})")
 
 try:
     champion_mv = client.get_model_version_by_alias(MODEL_NAME, "champion")
-    champion = mlflow.lightgbm.load_model(f"models:/{MODEL_NAME}@champion")
-    print(f"champion:   v{champion_mv.version}")
+    champion_flavor = flavor_of(champion_mv)
+    champion = load_by_flavor(f"models:/{MODEL_NAME}@champion", champion_flavor)
+    print(f"champion:   v{champion_mv.version} (model_flavor={champion_flavor})")
 except Exception:  # noqa: BLE001 — no @champion alias set yet (first run for this model)
-    champion_mv, champion = None, None
+    champion_mv, champion, champion_flavor = None, None, None
     print("champion:   none yet — this will be a bootstrap promotion if the challenger scores at all")
 
 if challenger_mv.version == getattr(champion_mv, "version", None):
@@ -115,6 +137,13 @@ if len(pdf) == 0:
 
 X, y = pdf[ETA_FEATURES], pdf[ETA_TARGET]
 
+# a sequence-flavored model needs the same rows in windowed form — built once, from the same
+# filtered `sdf`, only if at least one of challenger/champion actually needs it.
+if FLAVOR_TRANSFORMER in {challenger_flavor, champion_flavor}:
+    seq_frame = build_sequence_frame(sdf)
+    seq_cols = [c for c in seq_frame.columns if c.startswith("seq_")]
+    print(f"{len(seq_frame):,} rows windowed for the sequence model (SEQ_LEN={SEQ_LEN})")
+
 # COMMAND ----------
 # MAGIC %md ## 3. Score both models, by distance band
 
@@ -135,10 +164,19 @@ def by_band(pred, actual, dist):
     return out
 
 
-challenger_bands = by_band(challenger.predict(X), y.values, pdf["dist_to_apt_nm"])
-champion_bands = (
-    by_band(champion.predict(X), y.values, pdf["dist_to_apt_nm"]) if champion is not None else None
-)
+def score(model, flavor):
+    """Each flavor is scored against its own correctly-ordered frame — `pdf` and `seq_frame`
+    hold the same rows but not in the same order (`build_sequence_frame` sorts by
+    `seg_id, snapshot_ts`; `pdf` doesn't), so band MAE is compared, never row-for-row predictions
+    across the two frames."""
+    if flavor == FLAVOR_TRANSFORMER:
+        return by_band(model.predict(seq_frame[seq_cols]), seq_frame[ETA_TARGET].to_numpy(),
+                       seq_frame["dist_to_apt_nm"])
+    return by_band(model.predict(X), y.values, pdf["dist_to_apt_nm"])
+
+
+challenger_bands = score(challenger, challenger_flavor)
+champion_bands = score(champion, champion_flavor) if champion is not None else None
 
 report = pd.DataFrame({"challenger_mae": challenger_bands})
 if champion_bands:
