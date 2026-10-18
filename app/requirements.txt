@@ -10,3 +10,8 @@ pydeck>=0.9
 # metastore. See app/model.py.
 joblib>=1.3
 lightgbm>=4.3
+# LGBMRegressor is a scikit-learn wrapper: unpickled without scikit-learn, LightGBM swaps in a
+# stub base class and predict() fails ("'super' object has no attribute 'get_params'"). The
+# Apps base image doesn't ship it. Pinned to the champion's training env (its MLflow
+# requirements.txt) so the pickle loads exactly as trained.
+scikit-learn==1.6.1
