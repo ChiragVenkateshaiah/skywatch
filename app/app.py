@@ -91,6 +91,14 @@ def load_flag_history():
 
 
 @st.cache_data(ttl=60)
+def load_coverage():
+    try:
+        return data.coverage_today(APT_ICAO)
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=60)
 def load_briefing():
     # optional — ops_briefings exists only after skywatch_brief_ops has run once.
     try:
@@ -142,7 +150,15 @@ headroom = AAR_PER_BIN - peak_bin
 
 k1, k2, k3, k4 = st.columns(4)
 k1.metric("Inbound now", "—" if preds.empty else f"{len(preds)}")
-k2.metric("Arrivals so far today", "—" if pd.isna(arrivals_so_far) else f"{arrivals_so_far:.0f}")
+cov = load_coverage()
+first_ts = cov["first_ts"].iloc[0] if not cov.empty else None
+k2.metric(
+    "Arrivals seen today",
+    "—" if pd.isna(arrivals_so_far) else f"{arrivals_so_far:.0f}",
+    help=("Landings SkyWatch observed today (UTC) — only while it was collecting data, so not "
+          "the airport's full-day count."
+          + (f" First data today: {first_ts:%H:%M} UTC." if first_ts is not None and pd.notna(first_ts) else "")),
+)
 k3.metric("Predicted next 3 h", "—" if pd.isna(next3h) else f"{next3h:.0f}")
 k4.metric(
     "Peak-bin AAR headroom",
