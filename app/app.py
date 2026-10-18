@@ -60,9 +60,7 @@ def _ago(ts, now) -> str:
     mins = (now - ts.to_pydatetime()).total_seconds() / 60.0
     if mins < 1:
         return "just now"
-    if mins < 90:
-        return f"{mins:.0f} min ago"
-    return f"{mins / 60:.1f} h ago"
+    return f"{_span(mins)} ago"
 
 
 @st.cache_data(ttl=60)
@@ -348,6 +346,14 @@ st.divider()
 # ---------------------------------------------------------------------- irregularities
 st.subheader("Irregularity flags — Model 3 (rules)")
 flags = load_flags()
+# score_irregularities writes no rows on a run that flags nothing, so the newest flags can be
+# from long before the current Model 1 run. Same rule as src/lib/briefing.py:build_facts —
+# both jobs run every 10 min, so a flag older than this window would have been re-flagged.
+FLAGS_WINDOW = pd.Timedelta(minutes=15)
+if not flags.empty and pred_as_of is not None and flags["scored_at"].max() < pred_as_of - FLAGS_WINDOW:
+    st.caption(f"Last flag was {_ago(flags['scored_at'].max(), now)}, from an older run than the "
+               f"current Model 1 picture — not shown as current.")
+    flags = flags.iloc[0:0]
 _ICON = {"emergency": "🚨", "go_around": "🔴", "holding": "🟠"}
 _KIND_COLOUR = {"emergency": [214, 39, 40], "go_around": [239, 85, 59], "holding": [255, 140, 0]}
 _KIND_ORDER = ["emergency", "go_around", "holding"]

@@ -134,8 +134,8 @@ for the final verification is a separate, explicit decision because of quota.
   Found while building: `score_irregularities.py` writes **no rows** on a run that flags
   nothing, so "newest flags" can be days older than the newest predictions and still look
   current. `build_facts` drops flags older than 15 min before the predictions run (same
-  10-min schedule) — tested. The App's existing Model 3 panel has the same blind spot; not
-  changed in this arc.
+  10-min schedule) — tested. The App's existing Model 3 panel had the same blind spot — fixed
+  with the same rule in a follow-up (`fix/app-flags-and-sklearn`).
 
   Live runs on the real (stale) tables:
   - `387998633168606` — `SUCCESS`, source `llm`, check passed, 1.2 s, 605 prompt / 79 completion
@@ -151,3 +151,14 @@ for the final verification is a separate, explicit decision because of quota.
 
   **Open:** a fresh-data run needs the live pipeline on for a window (poller → gold → scoring →
   briefing), which is a quota decision, not done here.
+
+- **2026-10-18 — follow-up fixes (App).** (1) Model 3 panel: flags older than 15 min before the
+  current Model 1 run are no longer shown as current; a caption gives the last flag's age
+  instead. (2) Click-to-predict was broken: `app/requirements.txt` had no scikit-learn, and the
+  App build log shows only `joblib`, `lightgbm`, `scipy` installed. `LGBMRegressor` unpickled
+  without scikit-learn gets a stub base class, so `predict()` raised `'super' object has no
+  attribute 'get_params'`. Pinned `scikit-learn==1.6.1`, the champion's training env (its MLflow
+  `requirements.txt`: `lightgbm==4.7.0`, `scikit-learn==1.6.1`). Verified headless with `AppTest`
+  against the real warehouse: the whole page renders, click-to-predict returns 2.6 min (matches
+  the predictions table), the Model 3 panel shows "Last flag was 32 days ago … not shown as
+  current". Ages over 48 h now read in days everywhere in the App.
