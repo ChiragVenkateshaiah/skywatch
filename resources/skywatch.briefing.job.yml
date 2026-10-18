@@ -1,0 +1,33 @@
+# SkyWatch — LLM ops briefing (docs/OPS_BRIEFING_PLAN.md).
+# Facts from the latest Model 1/2/3 rows -> Foundation Model API (pay-per-token) -> grounding
+# check -> template fallback; one audit row per run to <catalog>.<stream_schema>.ops_briefings.
+#   databricks bundle run skywatch_brief_ops -t dev
+# Deployed PAUSED (same as the scoring jobs); 1 min past each 10-min cycle, after them.
+
+resources:
+  jobs:
+    skywatch_brief_ops:
+      name: skywatch-brief-ops
+      max_concurrent_runs: 1
+      timeout_seconds: 900
+      tags:
+        project: skywatch
+        component: ml
+
+      tasks:
+        - task_key: brief
+          notebook_task:
+            notebook_path: ../src/brief_ops.py
+            base_parameters:
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              apt_icao: ${var.apt_icao}
+              aar_per_hour: ${var.apt_aar_per_hour}
+              endpoint: ${var.briefing_endpoint}
+
+      schedule:
+        quartz_cron_expression: "0 1/10 * * * ?"   # every 10 min, offset 1 min past
+        timezone_id: UTC
+        pause_status: ${var.poller_pause_status}
+
+      queue:
+        enabled: true

@@ -63,6 +63,13 @@ variables:
       (KATL good-weather ~90). Also set in app/app.yaml env for the running app.
     default: "90"
 
+  # --- LLM ops briefing (src/brief_ops.py, docs/OPS_BRIEFING_PLAN.md) ---
+  briefing_endpoint:
+    description: >-
+      Foundation Model API chat endpoint for the ops briefing (pay-per-token). Chosen by
+      scripts/eval_briefing.py — see the plan's §4 table. Blank = template briefing only.
+    default: databricks-llama-4-maverick
+
   # --- Arrival Manager App (app/ + resources/skywatch.app.yml) ---
   warehouse_id:
     description: >-

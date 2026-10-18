@@ -608,7 +608,7 @@ Streamlit (or Dash). Max 3 apps on Free Edition; auto-stops 24 h after start/red
 | **Surge alerts** | Bins where predicted demand > AAR with ≥ 30 min lead; recommended action text | derived |
 | **Click-to-predict** | Select any aircraft → in-process M1 prediction + feature contributions | in-app model load |
 | **Irregularity panel** (later) | Flights currently flagged holding / go-around / diversion risk, with score | `gold_holding` + M3 |
-| **Ops briefing** (later) | LLM-generated paragraph summarising the arrival picture and risks | Foundation Model API |
+| **Ops briefing** ✅ (2026-10-18) | LLM-generated paragraph summarising the arrival picture and risks; grounding-checked, template fallback | `ops_briefings` ← `skywatch_brief_ops` (Foundation Model API) — `docs/OPS_BRIEFING_PLAN.md` |
 
 Auth: app service principal with least-privilege `SELECT` on the serving tables; secrets via
 Databricks secrets.
