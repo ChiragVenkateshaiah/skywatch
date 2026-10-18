@@ -44,6 +44,15 @@ def eta_colour(mins: float) -> list:
 st.set_page_config(page_title=f"SkyWatch — {APT_ICAO} Arrival Manager", layout="wide")
 
 
+def _span(mins: float) -> str:
+    """'45 min' / '6.5 h' / '34 days' for a duration in minutes."""
+    if mins < 90:
+        return f"{mins:.0f} min"
+    if mins < 48 * 60:
+        return f"{mins / 60:.1f} h"
+    return f"{mins / 1440:.0f} days"
+
+
 def _ago(ts, now) -> str:
     """Human 'N min ago' for a UTC timestamp, tolerant of NaT."""
     if ts is None or pd.isna(ts):
@@ -79,6 +88,15 @@ def load_flag_history():
     # gold_irregularities — the archive counts behind the "rules, not a learned model" call.
     try:
         return data.historical_irregularity_counts(APT_ICAO)
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=60)
+def load_briefing():
+    # optional — ops_briefings exists only after skywatch_brief_ops has run once.
+    try:
+        return data.latest_briefing(APT_ICAO)
     except Exception:
         return pd.DataFrame()
 
@@ -133,6 +151,34 @@ k4.metric(
     "—" if pd.isna(headroom) else f"{headroom:+.1f}",
     help="AAR per 15-min bin minus the busiest predicted bin. Negative = predicted demand exceeds capacity.",
 )
+
+st.divider()
+
+
+# ----------------------------------------------------------------------- ops briefing
+st.subheader("Ops briefing")
+brief = load_briefing()
+if brief.empty:
+    st.info("No ops briefing yet. Run `skywatch_brief_ops`.")
+else:
+    b = brief.iloc[0]
+    # data age comes from the row's columns, never from the model's text
+    age = int(b["max_age_min"]) if pd.notna(b["max_age_min"]) else None
+    skew = int(b["source_skew_min"]) if pd.notna(b["source_skew_min"]) else 0
+    if b["stale"]:
+        msg = f"Stale data — the oldest source is {_span(age)} old" if age is not None else "No source data"
+        if skew >= 30:
+            msg += f", and the sources are {_span(skew)} apart from each other"
+        st.warning(msg + ". This is not a picture of now.")
+    st.markdown(b["briefing"])
+    who = (f"LLM `{b['endpoint']}`, grounding check passed" if b["source"] == "llm"
+           else "Template fallback" + (f" — LLM answer rejected: {b['check_reasons']}"
+                                       if pd.notna(b["check_reasons"]) else ""))
+    as_of = (f" · data as of {b['data_as_of']:%Y-%m-%d %H:%M} UTC"
+             if pd.notna(b["data_as_of"]) else "")
+    st.caption(f"{who} · generated {_ago(b['generated_at'], now)}{as_of}")
+    with st.expander("Facts the briefing was built from"):
+        st.json(b["facts_json"])
 
 st.divider()
 

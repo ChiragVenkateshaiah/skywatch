@@ -134,3 +134,18 @@ def historical_hourly_profile(apt_icao: str) -> pd.DataFrame:
         ORDER BY hour_utc
         """
     )
+
+
+def latest_briefing(apt_icao: str) -> pd.DataFrame:
+    """Newest LLM ops briefing (src/brief_ops.py) — one row: the text, which path wrote it
+    (`llm` / `template`), and the data-age columns the panel renders itself."""
+    return query(
+        f"""
+        SELECT generated_at, briefing, source, endpoint, check_reasons, facts_json,
+               data_as_of, max_age_min, source_skew_min, stale
+        FROM ops_briefings
+        WHERE apt_icao = '{apt_icao}'
+        ORDER BY generated_at DESC
+        LIMIT 1
+        """
+    )
