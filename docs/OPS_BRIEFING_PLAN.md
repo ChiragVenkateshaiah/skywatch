@@ -162,3 +162,16 @@ for the final verification is a separate, explicit decision because of quota.
   against the real warehouse: the whole page renders, click-to-predict returns 2.6 min (matches
   the predictions table), the Model 3 panel shows "Last flag was 32 days ago … not shown as
   current". Ages over 48 h now read in days everywhere in the App.
+
+- **2026-10-18 — fresh-data run (closes the §6 open item).** One manual pass instead of
+  unpausing the schedules (quota): poller burst `460541681492515` (5.3 min) → `skywatch_medallion`
+  update `12aa367c` → gold with `notebook_params.mode=serving` (`963599045278190`, 1.1 min — `run-now`
+  params do override, unlike `bundle run --var`) → `score_eta` / `score_demand` /
+  `score_irregularities` in parallel (12.9 / 12.5 / 11.7 min) → `skywatch_brief_ops`
+  `953757917752291`. Briefing: source `llm`, check passed, 1.7 s, **`stale = false`, data age
+  1 min, skew 0** — "1 aircraft inbound within 30 minutes … N208LS … 22.8 minutes … peak at 09:45
+  is 4.2 … headroom 18.3 … no emergencies or aircraft holding"; every statement matches the facts.
+  Night at KATL (03:25 local) and only one burst of today's data, so `arrivals_so_far_today = 1`
+  and a near-empty sky are expected, not a bug. App redeployed from `main` (PR #42 build installs
+  `scikit-learn-1.6.1`); headless render on the fresh data: no stale warning, click-to-predict
+  22.8 min (matches the briefing). All schedules left `PAUSED`.
