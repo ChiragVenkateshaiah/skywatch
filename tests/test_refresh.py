@@ -1,0 +1,79 @@
+"""Tests for src/lib/refresh.py — the pre-interview refresh's readiness verdict
+(docs/DEMO_REFRESH_PLAN.md). Pure Python; the notebook (demo_refresh_check.py) gathers the inputs.
+"""
+
+from __future__ import annotations
+
+from lib.refresh import NOT_READY, READY, READY_SLOW, readiness, step_timings
+
+T0 = 1_792_307_000_000
+
+
+def _task(key, start_s, total_s, setup_s=4, state="SUCCESS"):
+    return {
+        "task_key": key,
+        "start_time": T0 + start_s * 1000,
+        "end_time": T0 + (start_s + total_s) * 1000 if total_s is not None else None,
+        "setup_duration": setup_s * 1000,
+        "execution_duration": (total_s - setup_s) * 1000 if total_s is not None else 0,
+        "state": {"result_state": state} if state else {"life_cycle_state": "RUNNING"},
+    }
+
+
+RUN = {"tasks": [_task("poll", 30, 190), _task("prepare", 0, 30), _task("check", 600, None, state=None)]}
+
+
+class TestStepTimings:
+    def test_sorted_by_start_with_seconds(self):
+        steps = step_timings(RUN)
+        assert [s["task"] for s in steps] == ["prepare", "poll", "check"]
+        assert steps[1] == {"task": "poll", "state": "SUCCESS", "setup_s": 4, "exec_s": 186,
+                            "total_s": 190, "start_time": T0 + 30_000}
+
+    def test_running_task_has_no_total(self):
+        check = step_timings(RUN)[-1]
+        assert check["total_s"] is None and check["state"] == "RUNNING"
+
+    def test_empty_run(self):
+        assert step_timings({}) == []
+
+
+def _ok(**kw):
+    args = dict(steps=step_timings(RUN), gold_age_min=3, forecast_age_min=2, briefing_age_min=1,
+                briefing_source="llm", n_inbound=24, elapsed_min=8.7)
+    args.update(kw)
+    return readiness(**args)
+
+
+class TestReadiness:
+    def test_all_fresh_within_budget_is_ready(self):
+        r = _ok()
+        assert r.status == READY and r.reasons == [] and r.warnings == []
+
+    def test_own_running_task_is_not_a_failure(self):
+        assert _ok().status == READY  # "check" is RUNNING while it computes this
+
+    def test_failed_step_is_not_ready(self):
+        steps = step_timings({"tasks": [_task("gold", 0, 60, state="FAILED")]})
+        r = _ok(steps=steps)
+        assert r.status == NOT_READY and r.reasons == ["failed steps: gold"]
+
+    def test_stale_or_missing_source_is_not_ready(self):
+        r = _ok(gold_age_min=42, briefing_age_min=None)
+        assert r.status == NOT_READY
+        assert r.reasons == ["ingested data (gold_tracks): 42 min old (> 15)", "ops briefing: no rows"]
+
+    def test_over_budget_is_ready_slow(self):
+        r = _ok(elapsed_min=12.4)
+        assert r.status == READY_SLOW and r.warnings[0] == "took 12.4 min (budget 10)"
+
+    def test_quiet_sky_is_a_warning_not_a_failure(self):
+        r = _ok(n_inbound=0)
+        assert r.status == READY and "quiet sky" in r.warnings[0]
+
+    def test_template_briefing_is_a_warning(self):
+        assert "template fallback" in _ok(briefing_source="template").warnings[0]
+
+    def test_slow_task_start_is_reported(self):
+        steps = step_timings({"tasks": [_task("score_eta", 0, 770, setup_s=705)]})
+        assert _ok(steps=steps).warnings == ["slow task start: score_eta setup 705 s"]

@@ -90,6 +90,11 @@ variables:
   poll_seconds:
     description: Total duration of one polling burst. 0 = single poll per run.
     default: "270"
+  refresh_poll_seconds:
+    description: >-
+      Poller burst length inside skywatch_demo_refresh (docs/DEMO_REFRESH_PLAN.md) — shorter
+      than poll_seconds so the whole refresh fits its 10-min budget.
+    default: "150"
   poll_interval_seconds:
     description: Gap between polls within a burst (>= 1 for the API rate limit).
     default: "15"
