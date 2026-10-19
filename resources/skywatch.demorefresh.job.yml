@@ -1,6 +1,7 @@
 # SkyWatch — pre-interview refresh (docs/DEMO_REFRESH_PLAN.md, roadmap DATA-1).
 # One fresh live picture in <= 10 min: preflight -> reset live tables -> poller burst -> Bronze/
 # Silver pipeline -> Gold (serving) -> M1 -> M2 -> M3 -> ops briefing -> readiness check.
+# Usually started by the local ops agent: python scripts/demo_ready.py
 # History is kept; only predictions / demand_forecast / irregularity_flags are cleared.
 #
 #   databricks bundle run skywatch_demo_refresh -t dev --profile skywatch

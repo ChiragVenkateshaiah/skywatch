@@ -71,3 +71,27 @@ from the refresh.
   without data with 0. After one short burst it reported 1 arrival at 15:39 UTC, and the App's
   KPI tile shows "Arrivals so far today: 1". Correct for what was observed, misleading in a
   demo. Not changed in DATA-1.
+
+- **2026-10-19 — ops agent (roadmap DATA-2a): `scripts/demo_ready.py`.** One local command
+  starts the refresh, prints each task as it starts and ends, reads the job's own
+  `refresh_audit` verdict, and exits 0 (READY / READY_SLOW) or 1. A failed task is classified
+  (`lib.refresh.classify_failure`: transient / auth / data / code); only an all-transient failure
+  is retried, once, as a Jobs **repair** run (re-runs the failed task and later ones, not the
+  preflight/reset). Anything else gets an LLM diagnosis. Shared REST client moved to
+  `scripts/dbx.py` (also used by `eval_briefing.py`).
+
+  **Agent finding, worth keeping:** the first version gave Maverick tools to fetch the evidence
+  itself. Tested on a real past failure (M1 Transformer attempt #4, run `797709381635769`,
+  `ValueError: Input contains NaN`), it wrote a fake tool call as plain text and **invented a
+  `java.io.FileNotFoundException` that was nowhere in the run**. Also found: the run JSON lists
+  every retry attempt of a task under the same key (`train` twice). Fixes: `latest_attempts`;
+  ANSI colour codes stripped from traces; the evidence goes straight into the prompt (no tool
+  loop); and the answer must quote an error line that really appears in it
+  (`lib.refresh.quote_is_grounded`) — otherwise the raw error is printed instead. Re-tested on two
+  real failures: both answers quoted the real error ("Input contains NaN.", "Run timed out").
+  Limit: the agent only knows what the error says — for the 2 h timeout it suggested a longer
+  timeout, while the real cause (the slow frame build) isn't in that error at all.
+
+  **End-to-end run** `1057941818921701`: **READY_SLOW, 10.1 min** — 113 inbound, 6 flagged,
+  LLM briefing, data as of 14:56 UTC. Over budget by 6 s: `prepare` exec 65 s (27 s on the first
+  run) and `medallion` 163 s (132 s). `refresh_poll_seconds` 150 → 120 for headroom.
