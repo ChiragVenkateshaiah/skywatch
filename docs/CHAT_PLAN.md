@@ -121,3 +121,22 @@ vary by ~3 items even at temperature 0). Only then does CHAT-2 start.
   **Open:** `promotion_audit` has **no rows for `demand_forecast`** — the Model 2 gate has never
   written its audit history, so "last gate decision for the demand model" can only say "none
   recorded" (`model_status` now documents what 0 rows means). Next: step 4 (App permissions).
+
+- **2026-10-19 — step 4: App permissions verified as the App's service principal.** App resources
+  added (`resources/skywatch.app.yml`): `serving_endpoint` CAN_QUERY on `var.chat_endpoint`
+  (Maverick) and `var.chat_fallback_endpoint` (Llama 3.3 70B), `genie_space` CAN_RUN on
+  `var.chat_genie_space_id`; env `SKYWATCH_CHAT_ENDPOINT` / `…_FALLBACK_ENDPOINT` /
+  `SKYWATCH_GENIE_SPACE_ID`. `skywatch.chat.chat_audit` created by `src/chat_tools.sql`; SP
+  granted `SELECT, MODIFY` on it (and `USE SCHEMA, EXECUTE` on the schema earlier).
+
+  Verified with `app/selfcheck.py`, started in the background by `app/app.yaml` at every App start
+  (it never delays Streamlit) and logging one `SELFCHECK` line per dependency — read with
+  `databricks apps logs skywatch-arrival-manager | grep SELFCHECK`. After deploy, **as the SP:
+  12/12 ok** — all 8 tools, both endpoints, Genie (MCP `tools/list` + a real query, 7.2 s), and an
+  audit insert + delete.
+
+  Two findings: (1) `model_status` / `model_health` work although the SP has no `SELECT` on
+  `skywatch.ml` tables — **UC SQL functions read their tables with the owner's rights**; the SP
+  needs only `EXECUTE`, so the tools are the only data door the chat has. (2) **Tool calls take
+  0.8–1.0 s from inside the App vs 1.6–2.1 s from a laptop** (network round trip): the local
+  golden-set latency overstates the chat's real latency.

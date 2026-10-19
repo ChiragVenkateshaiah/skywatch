@@ -14,6 +14,7 @@
 #   GRANT USE SCHEMA ON SCHEMA skywatch.ml TO `<app-service-principal>`;
 #   GRANT READ VOLUME ON VOLUME skywatch.ml.models TO `<app-service-principal>`;  -- click-to-predict
 #   GRANT USE SCHEMA, EXECUTE ON SCHEMA skywatch.chat TO `<app-service-principal>`;  -- chat tools (docs/CHAT_PLAN.md)
+#   GRANT SELECT, MODIFY ON TABLE skywatch.chat.chat_audit TO `<app-service-principal>`;  -- chat audit + feedback
 #
 # click-to-predict loads the model from that Volume (src/score_eta.py exports it there every
 # run), not the UC Model Registry — GRANT EXECUTE ON MODEL isn't available on this metastore
@@ -33,6 +34,20 @@ resources:
           sql_warehouse:
             id: ${var.warehouse_id}
             permission: CAN_USE
+        # Chat with SkyWatch (docs/CHAT_PLAN.md): the chat model, its fallback, and Genie
+        - name: chat-endpoint
+          serving_endpoint:
+            name: ${var.chat_endpoint}
+            permission: CAN_QUERY
+        - name: chat-fallback-endpoint
+          serving_endpoint:
+            name: ${var.chat_fallback_endpoint}
+            permission: CAN_QUERY
+        - name: genie-space
+          genie_space:
+            name: SkyWatch — KATL Arrival Manager
+            space_id: ${var.chat_genie_space_id}
+            permission: CAN_RUN
       # Overrides app/app.yaml's env at deploy time — files under source_code_path aren't
       # bundle-variable-substituted, so this is how catalog/schema/airport config actually
       # varies per target (docs/MLOPS_PLAN.md Track 3). app/app.yaml keeps the same literal
@@ -53,3 +68,9 @@ resources:
             value: ${var.apt_lon}
           - name: SKYWATCH_AAR_PER_HOUR
             value: ${var.apt_aar_per_hour}
+          - name: SKYWATCH_CHAT_ENDPOINT
+            value_from: chat-endpoint
+          - name: SKYWATCH_CHAT_FALLBACK_ENDPOINT
+            value_from: chat-fallback-endpoint
+          - name: SKYWATCH_GENIE_SPACE_ID
+            value_from: genie-space

@@ -1,11 +1,11 @@
 # Databricks App entry point — SkyWatch Arrival Manager (Streamlit).
 # The Apps runtime expects the process to listen on port 8000.
+# selfcheck.py runs in the background first: it logs, as the App's service principal, whether
+# every chat dependency works (docs/CHAT_PLAN.md §4). It never delays or blocks Streamlit.
 command:
-  - streamlit
-  - run
-  - app.py
-  - --server.port=8000
-  - --server.address=0.0.0.0
+  - sh
+  - -c
+  - "python selfcheck.py & exec streamlit run app.py --server.port=8000 --server.address=0.0.0.0"
 
 env:
   # Injected from the `warehouse` resource declared in resources/skywatch.app.yml

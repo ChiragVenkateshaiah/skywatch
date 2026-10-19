@@ -108,3 +108,17 @@ RETURN
   FROM skywatch.ml.model_health
   WHERE checked_at = (SELECT max(checked_at) FROM skywatch.ml.model_health)
   ORDER BY CASE severity WHEN 'significant' THEN 0 WHEN 'moderate' THEN 1 ELSE 2 END, metric_name;
+
+-- ------------------------------------------------------------------------------- audit
+-- One row per chat turn (roadmap CHAT-EVAL-1). The App appends it after the answer is shown and
+-- updates `feedback` when the viewer clicks 👍/👎. App SP: SELECT + MODIFY (skywatch.app.yml).
+CREATE TABLE IF NOT EXISTS skywatch.chat.chat_audit (
+  turn_id STRING, session_id STRING, asked_at TIMESTAMP,
+  question STRING, answer STRING, source STRING,
+  tools_json STRING, rounds INT, nudged BOOLEAN, repaired BOOLEAN,
+  check_passed BOOLEAN, check_reasons STRING, repair_reasons STRING,
+  endpoint STRING, prompt_version STRING,
+  prompt_tokens INT, completion_tokens INT,
+  llm_seconds DOUBLE, tool_seconds DOUBLE, total_seconds DOUBLE,
+  data_as_of STRING, feedback STRING, feedback_at TIMESTAMP
+) COMMENT 'Chat with SkyWatch: one row per turn — question, tools, answer, grounding result, latency, tokens, viewer feedback.';
