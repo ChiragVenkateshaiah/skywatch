@@ -69,6 +69,8 @@ Effort: S ≤ 1 day · M 2–4 days · L ≥ 1 week.
 | **AGENT-ML** | Experiment agent: proposes a feature/hyper-parameter change, runs the train job, runs the gate, writes the audit summary — a human approves any `apply=true` | P2 | Medium | M | M1-WX or M2-FT exists to try | first P2 model item starts | Platform v1.3 |
 | **M1-TX** | Revisit the Transformer with regularisation and a larger validation window | P3 | Low now | M | DATA-3 | ≥ 60 days of arrivals (it overfit at today's size, `docs/M1_TRANSFORMER_PLAN.md`) | M1 vNext |
 | **M3-LEARN** | Learned Model 3 (one-vs-rest) | P3 | Medium later | L | M3-LBL | label count reaches classifier scale (roadmap §7) | M3 v3 |
+| **APP-1** | Minimal dashboard (decided 2026-10-19): freshness pill, 4 KPIs (inbound, next 3 h vs capacity, peak headroom, alerts), the briefing card, **one map** (alerts as rings), one demand chart, and "Ask SkyWatch" buttons that open the chat with the question asked. Removed — the chat answers them: click-to-predict, arrival-sequence table, surge list, second map + Model 3 history, the red/orange alert boxes that read as app errors | P0 | High — what an interviewer sees first | S | CHAT-1 | 🟡 built + tested headless 2026-10-19, **not deployed** (warehouse quota, §8) | App v2.2 |
+| **OPT-4** | Quota-aware evaluation: the golden set is the biggest single compute cost (~40 tool SQL calls + ~60 model calls per run, 15+ runs on 2026-10-19). Run it only on prompt / tool / loop changes; cache tool results per run | P1 | Medium — keeps Free Edition usable | S | CHAT-EVAL-1 | the 2026-10-19 quota stop (§8) | Platform |
 | **SMALL-1** | KPI tile headroom (+18.2, unrounded peak) vs briefing (18.3, rounded peak) — use one rounding | P3 | Low | S | — | next time `app/app.py` KPIs are touched | App v2.x |
 
 Every model item goes through the existing promotion gate and writes a `promotion_audit` row. A
@@ -106,3 +108,33 @@ HOLD is a complete, documented result (as in the M1 Transformer arc).
   (`docs/DEMO_REFRESH_PLAN.md` §4). Every agent answer must be checked against the evidence it
   was given — numbers for the briefing, a quoted error line for the diagnosis — with a plain
   fallback when the check fails. CHAT-1's tool loop needs the same guard.
+
+## 8. Where we stopped (checkpoint 2026-10-19)
+
+Shipped to `main` and live in the App today: DATA-1 (refresh job), DATA-2a (local ops agent),
+CHAT-1 + CHAT-EVAL-1 + DATA-2b + OPT-3 + DEMO-1 (PR #48), OPT-1 live snapshot + DOC-1 lessons
+(PR #49), the Streamlit 1.38.0 pin that fixed the chat page crash (PR #50).
+
+**Stopped by the Free Edition compute quota.** Late on 2026-10-19 the SQL warehouse
+(`8fd481cbf45ac93e`) would not start: every query → "The request could not be processed by the
+warehouse"; `databricks warehouses start` → "Cannot create the resource, please try again later."
+The live App can't load data until it starts again. Most likely the daily quota after a heavy day
+(three refreshes, many jobs, ~15 golden-set runs, several App restarts) → OPT-4.
+
+**In progress — APP-1, branch `app/minimal-dashboard` (pushed, not merged, not deployed):**
+`app/dashboard.py` rewritten; `app/chat.py` picks up a question handed over by the dashboard
+(`pending_question`); unused `app/data.py` helpers removed. Tested headless on Streamlit 1.38.0:
+no exceptions, no error/warning boxes, 4 KPIs, briefing, map, chart, 3 "Ask SkyWatch" buttons.
+
+**Next, in order, once the warehouse starts:**
+1. `databricks api post /api/2.0/sql/statements … "SELECT 1"` — one call to confirm it's back.
+2. Re-run the hand-over test: chat page with `pending_question` preset must produce one checked
+   turn (on 2026-10-19 it reached the page but failed on the warehouse, not on the code).
+   `AppTest` 1.38 can't drive the `st.navigation` router, so test the two halves separately.
+3. `bundle deploy` + `bundle run skywatch_arrival_manager`; `apps logs … | grep SELFCHECK` (expect
+   14/14); open the App in a browser once — dashboard, an Ask button, the chat answer.
+4. Open the APP-1 PR, merge, then OPT-4 before any further golden-set runs; then CHAT-2.
+
+Local test setup to remember: the App's Streamlit is **1.38.0** — test in a venv with exactly that
+(`AppTest` there needs `PYTHONPATH=app`); the Spark tests need a JDK (CI has one).
+
