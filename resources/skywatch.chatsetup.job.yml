@@ -1,0 +1,25 @@
+# SkyWatch — chat tools setup (docs/CHAT_PLAN.md §3). Applies src/chat_tools.sql: the UC
+# functions in skywatch.chat that the App's chat calls (direct SQL) and that Databricks-managed
+# MCP serves to other agents (/api/2.0/mcp/functions/skywatch/chat). Re-runnable (CREATE OR REPLACE).
+#   databricks bundle run skywatch_chat_setup -t dev --profile skywatch
+# Run after any change to src/chat_tools.sql. One-time grant for the App SP: see skywatch.app.yml.
+
+resources:
+  jobs:
+    skywatch_chat_setup:
+      name: skywatch-chat-setup
+      max_concurrent_runs: 1
+      timeout_seconds: 600
+      tags:
+        project: skywatch
+        component: app
+
+      tasks:
+        - task_key: apply
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../src/chat_tools.sql
+
+      queue:
+        enabled: true

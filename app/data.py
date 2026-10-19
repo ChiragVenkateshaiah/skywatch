@@ -12,7 +12,7 @@ import os
 
 import pandas as pd
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.sql import StatementState
+from databricks.sdk.service.sql import StatementParameterListItem, StatementState
 
 WAREHOUSE_ID = os.environ["SKYWATCH_WAREHOUSE_ID"]
 CATALOG = os.environ.get("SKYWATCH_CATALOG", "skywatch")
@@ -26,19 +26,41 @@ _NUMERIC = {"INT", "SHORT", "LONG", "BYTE", "FLOAT", "DOUBLE", "DECIMAL"}
 _TEMPORAL = {"TIMESTAMP", "TIMESTAMP_NTZ", "DATE"}
 
 
-def query(sql: str) -> pd.DataFrame:
-    """Run `sql` on the configured warehouse and return a typed DataFrame."""
+def _execute(sql: str, params: dict | None = None):
+    """Statement Execution API call; `params` become named parameter markers (`:name`), so
+    free text such as a chat question is never pasted into the SQL."""
     resp = _w.statement_execution.execute_statement(
         warehouse_id=WAREHOUSE_ID,
         statement=sql,
         catalog=CATALOG,
         schema=SCHEMA,
         wait_timeout="50s",
+        parameters=[StatementParameterListItem(name=k, value=None if v is None else str(v))
+                    for k, v in (params or {}).items()] or None,
     )
     state = resp.status.state
     if state != StatementState.SUCCEEDED:
         err = getattr(resp.status, "error", None)
         raise RuntimeError(f"query failed ({state}): {getattr(err, 'message', err)}")
+    return resp
+
+
+def execute(sql: str, params: dict | None = None) -> None:
+    """A statement with no result worth reading (INSERT / UPDATE)."""
+    _execute(sql, params)
+
+
+def query_raw(sql: str) -> tuple[list[str], list[list]]:
+    """Column names + rows exactly as the warehouse returns them (strings) — what the chat's
+    tools hand the model, and what its grounding check compares against."""
+    resp = _execute(sql)
+    names = [c.name for c in (resp.manifest.schema.columns or [])] if resp.manifest else []
+    return names, (resp.result.data_array if resp.result else None) or []
+
+
+def query(sql: str) -> pd.DataFrame:
+    """Run `sql` on the configured warehouse and return a typed DataFrame."""
+    resp = _execute(sql)
 
     columns = resp.manifest.schema.columns or []
     names = [c.name for c in columns]

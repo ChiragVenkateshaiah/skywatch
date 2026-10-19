@@ -70,6 +70,17 @@ variables:
       scripts/eval_briefing.py — see the plan's §4 table. Blank = template briefing only.
     default: databricks-llama-4-maverick
 
+  # --- Chat with SkyWatch (app/chat.py, docs/CHAT_PLAN.md) ---
+  chat_endpoint:
+    description: Foundation Model API chat endpoint for the App's chat (tool calling verified).
+    default: databricks-llama-4-maverick
+  chat_fallback_endpoint:
+    description: Used when the chat endpoint errors (roadmap OPT-3).
+    default: databricks-meta-llama-3-3-70b-instruct
+  chat_genie_space_id:
+    description: Genie space behind the chat's ask_genie tool ("SkyWatch — KATL Arrival Manager").
+    default: "01f1a7adfd07143d8c92fd72fa8fa48f"
+
   # --- Arrival Manager App (app/ + resources/skywatch.app.yml) ---
   warehouse_id:
     description: >-
