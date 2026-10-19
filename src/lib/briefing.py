@@ -20,11 +20,11 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
-import re
-from dataclasses import dataclass, field
 from typing import Any
 
 import pandas as pd
+
+from lib import grounding
 
 WINDOWS_MIN = (10, 30)       # "predicted to land within N minutes" buckets
 BIN_MINUTES = 15
@@ -189,75 +189,14 @@ def extract_text(response: dict[str, Any]) -> str:
 
 
 # ----------------------------------------------------------------------------- check
-@dataclass
-class CheckResult:
-    passed: bool
-    reasons: list[str] = field(default_factory=list)
-
-
-_CALLSIGN = re.compile(r"\b[A-Z]{2,4}\d{1,4}[A-Z]{0,2}\b")
-_TIME = re.compile(r"\b\d{1,2}:\d{2}\b")
-_KEY = re.compile(r"\b[a-z]+(?:_[a-z0-9]+)+\b")   # snake_case = a JSON key leaked into prose
-_NUMBER = re.compile(r"(?<![\w.])\d+(?:,\d{3})*(?:\.\d+)?")
-
-
-def _walk(obj: Any):
-    if isinstance(obj, dict):
-        for v in obj.values():
-            yield from _walk(v)
-    elif isinstance(obj, (list, tuple)):
-        for v in obj:
-            yield from _walk(v)
-    else:
-        yield obj
-
-
-def _allowed(facts: dict[str, Any]) -> tuple[set[float], set[str], set[str]]:
-    numbers: set[float] = set()
-    times: set[str] = set()
-    callsigns: set[str] = set()
-    pf = prompt_facts(facts)
-    for v in _walk(pf):
-        if isinstance(v, bool) or v is None:
-            continue
-        if isinstance(v, (int, float)):
-            numbers.update({abs(float(v)), float(round(abs(v)))})
-        elif isinstance(v, str):
-            if _TIME.fullmatch(v):
-                times.add(v)
-                h, m = v.split(":")
-                times.add(f"{int(h)}:{m}")
-            callsigns.update(_CALLSIGN.findall(v))
-    for w in WINDOWS_MIN:  # the window sizes are in the facts as key names, not values
-        numbers.add(float(w))
-    return numbers, times, callsigns
+# The check itself lives in lib/grounding.py, shared with the chat (lib/chat.py).
+CheckResult = grounding.CheckResult
 
 
 def check_briefing(text: str, facts: dict[str, Any], max_words: int = MAX_WORDS) -> CheckResult:
-    reasons = []
-    if not text or not text.strip():
-        return CheckResult(False, ["empty text"])
-    words = len(text.split())
-    if words > max_words:
-        reasons.append(f"{words} words > {max_words}")
-    for key in sorted(set(_KEY.findall(text))):
-        reasons.append(f"key name {key} in text")
-    numbers, times, callsigns = _allowed(facts)
-
-    rest = text
-    for cs in _CALLSIGN.findall(rest):
-        if cs not in callsigns:
-            reasons.append(f"callsign {cs} not in facts")
-    rest = _CALLSIGN.sub(" ", rest)
-    for t in _TIME.findall(rest):
-        if t not in times:
-            reasons.append(f"time {t} not in facts")
-    rest = _TIME.sub(" ", rest)
-    for raw in _NUMBER.findall(rest):
-        x = float(raw.replace(",", ""))
-        if not any(abs(x - n) < 0.051 for n in numbers):
-            reasons.append(f"number {raw} not in facts")
-    return CheckResult(not reasons, reasons)
+    # the window sizes are in the facts as key names ("within_10_min"), not values
+    allowed = grounding.harvest(prompt_facts(facts), extra_numbers=WINDOWS_MIN)
+    return grounding.check_text(text, allowed, max_words, source="facts")
 
 
 # -------------------------------------------------------------------------- template

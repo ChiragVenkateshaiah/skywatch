@@ -61,7 +61,7 @@ the repo like everything else.
 result and reasons, rounds, tokens, latency per stage, `prompt_version`, 👍/👎. Needs the App SP to
 `INSERT` into one table (grant to verify).
 
-**Evaluation (CHAT-EVAL-1, written before the prompt is tuned):** `tests/chat_golden.yaml` —
+**Evaluation (CHAT-EVAL-1, written before the prompt is tuned):** `tests/chat_golden.json` —
 questions with the tools they should call and what the answer must (or must not) contain, run by
 `scripts/eval_chat.py` against the live endpoint like `eval_briefing.py`: tool-selection
 accuracy, grounding pass rate, refusal correctness, rounds, latency p50/p95, tokens.
@@ -80,7 +80,44 @@ the chat endpoint; access to the Genie space (a `genie_space` App resource); `MO
 4. App SP grants + App resources, verified live.
 5. `app/chat.py` page: loop, guards, "how I answered", data-age label, audit, 👍/👎.
 6. Golden-set run → tune → numbers in this doc. DATA-2b ("Get SkyWatch ready") last.
+7. **Added 2026-10-19:** warm-up at the end of `scripts/demo_ready.py` (warehouse, chat tools,
+   Genie — the first MCP call took 37 s cold), the model fallback order (roadmap OPT-3, moved
+   into CHAT-1), and a fixed demo script that shows the guards working.
+
+**Done means:** ≥ 90% pass on **three consecutive** golden-set runs (decided 2026-10-19 — runs
+vary by ~3 items even at temperature 0). Only then does CHAT-2 start.
 
 ## 6. Progress log
 
 - **2026-10-19 — arc started.** Live checks in §2. Branch `chat/v1`.
+
+- **2026-10-19 — steps 2 + 3 built.** `src/lib/chat.py` (turn loop: tool specs read from
+  `information_schema`, typed/stripped SQL literals, ≤ 4 rounds, text-tool-call nudge, grounding
+  with one repair round, meaning rules, fallback that shows the tool rows), `src/lib/grounding.py`
+  (the briefing's check, now shared; also harvests numbers from SQL string cells, ISO timestamps
+  and free text, judges `HH:MM:SS` / full timestamps by their `HH:MM`), `genie_ask` (managed MCP,
+  ask + poll). `tests/chat_golden.json` (38 items) + `scripts/eval_chat.py`. 64 unit tests.
+
+  | Run | Pass | Tool sel. | Grounded | Refusal | Repairs | p50 / p95 s | What changed before it |
+  |---|---|---|---|---|---|---|---|
+  | 1 | 32/38 | 38/38 | 33/38 | 3/5 | 12 | 5.6 / 28.3 | baseline |
+  | 2 | 36/38 | 37/38 | 38/38 | 5/5 | 1 | 5.9 / 27.2 | values in free-text cells, system prompt and tool descriptions allowed; `kind_count`; refusal phrases |
+  | 3 | 33/38 | 37/38 | 35/38 | 4/5 | 3 | 5.7 / 26.8 | meaning rule ("landings today"); `model_status` description names LightGBM / Transformer |
+  | 4 | **38/38** | 38/38 | 36/36 | 5/5 | 1 | 5.8 / 29.5 | timestamps judged by HH:MM; `next_hour_total` / `next_3h_total`; no-instructions rule; `app_only` for explain items |
+  | 5 | **37/38** | 38/38 | 35/36 | 5/5 | 2 | 5.2 / 22.8 | — (same code, variance check) |
+
+  What the failures taught, in order: (1) most early failures were the check being too strict —
+  values inside free-text cells (`squawk=7700`, the briefing paragraph) and in the system prompt
+  ("next 3 hours") are evidence too; (2) a correct number in a wrong sentence ("6 flights have
+  landed today") passes any value check, so the misreadings that matter get a deterministic
+  meaning rule — it fired and repaired correctly in runs 3–5; (3) asked for "the next hour", the
+  model adds bins itself, which the check rightly blocks — so the tool returns the totals;
+  (4) a question can name a model in words the tool doesn't use ("Transformer"), so the
+  description must; (5) **runs vary by ~3 items at temperature 0**, hence the three-run rule.
+
+  Latency p50 5.2–5.9 s (target < 4 s), p95 23–30 s (Genie items, ~18 s each); ~4,300 tokens per
+  item, mostly system prompt + 10 tool descriptions — OPT-1 work.
+
+  **Open:** `promotion_audit` has **no rows for `demand_forecast`** — the Model 2 gate has never
+  written its audit history, so "last gate decision for the demand model" can only say "none
+  recorded" (`model_status` now documents what 0 rows means). Next: step 4 (App permissions).

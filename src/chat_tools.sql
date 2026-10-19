@@ -49,23 +49,26 @@ RETURN
 
 CREATE OR REPLACE FUNCTION skywatch.chat.demand_outlook(aar_per_hour DOUBLE)
 RETURNS TABLE (bin_start_utc STRING, predicted DOUBLE, upper DOUBLE, aar_per_15min DOUBLE,
-               over_aar BOOLEAN, upper_over_aar BOOLEAN, arrivals_seen_by_skywatch_today INT,
-               scored_at TIMESTAMP)
-COMMENT 'Model 2 demand forecast for the next 3 hours at KATL, one row per 15-minute bin: predicted arrivals, the upper end of the forecast range, the airport acceptance rate (AAR, capacity) per 15 minutes, and whether the bin is predicted over capacity. arrivals_seen_by_skywatch_today counts only landings SkyWatch observed while collecting data - not the airport total. Pass aar_per_hour = 90 for KATL.'
+               over_aar BOOLEAN, upper_over_aar BOOLEAN, next_hour_total DOUBLE, next_3h_total DOUBLE,
+               arrivals_seen_by_skywatch_today INT, scored_at TIMESTAMP)
+COMMENT 'Model 2 demand forecast for the next 3 hours at KATL, one row per 15-minute bin: predicted arrivals, the upper end of the forecast range, the airport acceptance rate (AAR, capacity) per 15 minutes, and whether the bin is predicted over capacity. next_hour_total / next_3h_total are the predicted arrivals summed over the first 4 / all 12 bins (use them instead of adding bins). arrivals_seen_by_skywatch_today counts only landings SkyWatch observed while collecting data - not the airport total. Pass aar_per_hour = 90 for KATL.'
 RETURN
   SELECT date_format(bin_start_ts, 'HH:mm'), round(predicted_mean, 1), round(predicted_q90, 1),
          round(aar_per_hour / 4, 1), predicted_mean > aar_per_hour / 4, predicted_q90 > aar_per_hour / 4,
+         round(sum(CASE WHEN horizon_step < 4 THEN predicted_mean END) OVER (), 0),
+         round(sum(predicted_mean) OVER (), 0),
          CAST(arrivals_so_far AS INT), scored_at
   FROM skywatch.stream.demand_forecast
   WHERE scored_at = (SELECT max(scored_at) FROM skywatch.stream.demand_forecast)
   ORDER BY horizon_step;
 
 CREATE OR REPLACE FUNCTION skywatch.chat.irregularities()
-RETURNS TABLE (kind STRING, severity INT, callsign STRING, ac_type STRING, dist_nm DOUBLE,
+RETURNS TABLE (kind STRING, kind_count INT, severity INT, callsign STRING, ac_type STRING, dist_nm DOUBLE,
                alt_ft DOUBLE, detail STRING, scored_at TIMESTAMP)
-COMMENT 'Aircraft currently flagged by Model 3 rules at KATL: emergency squawk, go-around, or holding pattern, most severe first. No rows means nothing is flagged right now. Flags from an older run than the current Model 1 picture are not returned.'
+COMMENT 'Aircraft currently flagged by Model 3 rules at KATL: emergency squawk, go-around, or holding pattern, most severe first; kind_count is how many aircraft have that kind of flag. No rows means nothing is flagged right now. Flags from an older run than the current Model 1 picture are not returned.'
 RETURN
-  SELECT kind, CAST(severity AS INT), coalesce(nullif(trim(callsign), ''), icao), ac_type,
+  SELECT kind, CAST(count(*) OVER (PARTITION BY kind) AS INT), CAST(severity AS INT),
+         coalesce(nullif(trim(callsign), ''), icao), ac_type,
          round(dist_to_apt_nm, 0), round(alt_ft, 0), detail, scored_at
   FROM skywatch.stream.irregularity_flags
   WHERE apt_icao = 'KATL'
@@ -88,7 +91,7 @@ RETURN
 CREATE OR REPLACE FUNCTION skywatch.chat.model_status(model STRING)
 RETURNS TABLE (model_name STRING, gate_verdict STRING, challenger_version BIGINT,
                champion_version_before BIGINT, applied BOOLEAN, reasons STRING, audited_at TIMESTAMP)
-COMMENT 'Promotion-gate history for one SkyWatch model, newest first (last 5): eta_touchdown (Model 1, time to touchdown) or demand_forecast (Model 2, arrival demand). Each row: PASS or HOLD, which challenger was tested against which champion, whether it was applied, and why.'
+COMMENT 'Promotion-gate history for one SkyWatch model, newest first (last 5): eta_touchdown (Model 1, time to touchdown; the champion is LightGBM, and Transformer challengers were tested against it) or demand_forecast (Model 2, arrival demand). Each row: PASS or HOLD, which challenger version was tested against which champion version, whether it was applied, and why (overall MAE in minutes vs the champion). Use it for: which model is in production, did a challenger such as the Transformer beat LightGBM, how accurate a model is. No rows means no gate run has been recorded for that model.'
 RETURN
   SELECT model_name, gate_verdict, challenger_version, champion_version_before, applied, reasons, audited_at
   FROM skywatch.ml.promotion_audit

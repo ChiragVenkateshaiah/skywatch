@@ -1,0 +1,139 @@
+"""Deterministic grounding check shared by the ops briefing (lib/briefing.py) and the chat
+(lib/chat.py): every number, HH:MM time and callsign in a model's text must come from the
+evidence it was given, no JSON key may leak into prose, and the text must be short.
+
+`harvest(evidence)` collects what is allowed; `check_text(text, allowed)` compares. Evidence can
+be any nesting of dicts / lists / scalars. Strings count too, because SQL tool results arrive as
+strings ("113", "12.7", "2026-10-19T15:01:20.067Z") — numeric strings become numbers, an ISO
+timestamp contributes its HH:MM and its date parts, and free text ("squawk=7700", a briefing
+paragraph) contributes the values written in it.
+
+Known limit (measured in docs/OPS_BRIEFING_PLAN.md §4): this catches invented or recomputed
+values, not a wrong word next to a correct value.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from typing import Any, Iterable
+
+CALLSIGN = re.compile(r"\b[A-Z]{2,4}\d{1,4}[A-Z]{0,2}\b")
+TIME = re.compile(r"\b\d{1,2}:\d{2}\b")
+KEY = re.compile(r"\b[a-z]+(?:_[a-z0-9]+)+\b")   # snake_case = a JSON key leaked into prose
+NUMBER = re.compile(r"(?<![\w.])\d+(?:,\d{3})*(?:\.\d+)?")
+_ISO = re.compile(r"(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})")
+_NUMERIC = re.compile(r"-?\d+(?:\.\d+)?")
+_STAMP = re.compile(r"(?:(?P<date>\d{4}-\d{2}-\d{2})[T ])?(?<![\d:])(?P<h>\d{1,2}):(?P<m>\d{2}):\d{2}(?:\.\d+)?Z?")
+
+
+@dataclass
+class CheckResult:
+    passed: bool
+    reasons: list[str] = field(default_factory=list)
+
+
+@dataclass
+class Allowed:
+    numbers: set[float] = field(default_factory=set)
+    times: set[str] = field(default_factory=set)
+    callsigns: set[str] = field(default_factory=set)
+
+    def add_number(self, x: float) -> None:
+        self.numbers.update({abs(float(x)), float(round(abs(x)))})
+
+    def add_time(self, hh: str, mm: str) -> None:
+        self.times.update({f"{int(hh):02d}:{mm}", f"{int(hh)}:{mm}"})
+
+    def merge(self, other: "Allowed") -> "Allowed":
+        self.numbers |= other.numbers
+        self.times |= other.times
+        self.callsigns |= other.callsigns
+        return self
+
+
+def walk(obj: Any):
+    if isinstance(obj, dict):
+        for v in obj.values():
+            yield from walk(v)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            yield from walk(v)
+    else:
+        yield obj
+
+
+def harvest(evidence: Any, extra_numbers: Iterable[float] = ()) -> Allowed:
+    a = Allowed()
+    for v in walk(evidence):
+        if isinstance(v, bool) or v is None:
+            continue
+        if isinstance(v, (int, float)):
+            a.add_number(v)
+        elif isinstance(v, str):
+            s = v.strip()
+            iso = _ISO.findall(s)
+            if _NUMERIC.fullmatch(s):
+                a.add_number(float(s))
+            elif TIME.fullmatch(s):
+                a.add_time(*s.split(":"))
+            elif iso:
+                for y, mo, d, hh, mm in iso:
+                    a.add_time(hh, mm)
+                    for part in (y, mo, d):
+                        a.add_number(float(part))
+            else:
+                # free text inside the evidence ("squawk=7700 emergency=general", a briefing
+                # paragraph) is evidence too: its values are allowed
+                a.merge(harvest_prose([s]))
+            a.callsigns.update(CALLSIGN.findall(s))
+    for x in extra_numbers:
+        a.add_number(x)
+    return a
+
+
+def check_text(text: str, allowed: Allowed, max_words: int, source: str = "facts") -> CheckResult:
+    if not text or not text.strip():
+        return CheckResult(False, ["empty text"])
+    reasons = []
+    words = len(text.split())
+    if words > max_words:
+        reasons.append(f"{words} words > {max_words}")
+    for key in sorted(set(KEY.findall(text))):
+        reasons.append(f"key name {key} in text")
+
+    rest = text
+    # full timestamps / HH:MM:SS: judge them by their HH:MM, so "…T15:51:28" isn't read as "51:28"
+    for m in _STAMP.finditer(rest):
+        if f"{int(m.group('h')):02d}:{m.group('m')}" not in allowed.times:
+            reasons.append(f"time {m.group(0)} not in {source}")
+    rest = _STAMP.sub(lambda m: f" {m.group('date') or ''} ", rest)
+    for cs in CALLSIGN.findall(rest):
+        if cs not in allowed.callsigns:
+            reasons.append(f"callsign {cs} not in {source}")
+    rest = CALLSIGN.sub(" ", rest)
+    for t in TIME.findall(rest):
+        if t not in allowed.times:
+            reasons.append(f"time {t} not in {source}")
+    rest = TIME.sub(" ", rest)
+    for raw in NUMBER.findall(rest):
+        x = float(raw.replace(",", ""))
+        if not any(abs(x - n) < 0.051 for n in allowed.numbers):
+            reasons.append(f"number {raw} not in {source}")
+    return CheckResult(not reasons, reasons)
+
+
+def harvest_prose(texts: Iterable[str]) -> Allowed:
+    """Values written inside free text — the user's question ("the next 5"), or an earlier
+    answer that already passed this check. `harvest` only takes whole-value strings (SQL cells),
+    so prose needs its own pass."""
+    a = Allowed()
+    for text in texts:
+        t = text or ""
+        a.callsigns.update(CALLSIGN.findall(t))
+        rest = CALLSIGN.sub(" ", t)
+        for hhmm in TIME.findall(rest):
+            a.add_time(*hhmm.split(":"))
+        for raw in NUMBER.findall(TIME.sub(" ", rest)):
+            a.add_number(float(raw.replace(",", "")))
+    return a
