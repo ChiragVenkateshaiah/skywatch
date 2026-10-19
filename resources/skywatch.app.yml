@@ -48,6 +48,12 @@ resources:
             name: SkyWatch — KATL Arrival Manager
             space_id: ${var.chat_genie_space_id}
             permission: CAN_RUN
+        # "Get SkyWatch ready" button on the chat page (roadmap DATA-2b) — a human action;
+        # the chat model only gets the read-only refresh_status tool
+        - name: demo-refresh-job
+          job:
+            id: ${resources.jobs.skywatch_demo_refresh.id}
+            permission: CAN_MANAGE_RUN
       # Overrides app/app.yaml's env at deploy time — files under source_code_path aren't
       # bundle-variable-substituted, so this is how catalog/schema/airport config actually
       # varies per target (docs/MLOPS_PLAN.md Track 3). app/app.yaml keeps the same literal
@@ -74,3 +80,5 @@ resources:
             value_from: chat-fallback-endpoint
           - name: SKYWATCH_GENIE_SPACE_ID
             value_from: genie-space
+          - name: SKYWATCH_REFRESH_JOB_ID
+            value_from: demo-refresh-job

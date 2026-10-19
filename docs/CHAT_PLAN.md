@@ -163,3 +163,26 @@ vary by ~3 items even at temperature 0). Only then does CHAT-2 start.
   (3.5 s); "Is any aircraft holding right now?" → the 5 callsigns (5.5 s). All four `chat_audit`
   rows written. Deployed; the SP self-check after deploy: 12/12 ok. Not done from here: driving
   the *deployed* page as the SP (needs a browser login) — the self-check covers its dependencies.
+
+- **2026-10-19 — step 6: CHAT-1 done.**
+  - **Stability rule met:** golden-set runs 4 / 5 / 6 on Maverick = **38 / 37 / 38** of 38 (≥ 90% on
+    three consecutive runs). Tool selection 38/38 and refusals 5/5 in all three.
+  - **Endpoint comparison (run 6, same code):** Maverick 38/38, 1 repair, p50 5.7 s, 4,264
+    tokens/item · Llama 3.3 70B 37/38, **6 repairs**, p50 5.1 s, 5,314 tokens/item. Kept Maverick as
+    the chat endpoint (fewer repairs = fewer extra rounds = steadier tail), Llama 3.3 as the
+    fallback. Llama's one failure — `model_status('Model 1')` → 0 rows — led to `model_status`
+    accepting "Model 1" / "Model 2" / "ETA" / "demand" (tested: "Model 1" → the same 3 rows).
+  - **Latency not at target:** ~5.3 s in the App for a one-tool question (two model rounds ≈ 4 s,
+    tools ≈ 1.2 s) vs the < 4 s target. Left to OPT-1 (shorter prompt + tool descriptions —
+    ~4,300 tokens are resent every round — and streaming the final answer).
+  - **DATA-2b:** a **Get SkyWatch ready** section in the chat sidebar — the latest refresh verdict,
+    and *Run refresh…* → a warning → *Yes, refresh* (two clicks; the refresh clears the live
+    picture and takes ~10 min). Deliberately a human action: the model gets only the read-only
+    `refresh_status()` tool ("Is SkyWatch ready, and how fresh is the data?" → answered and
+    checked). App resource `job` CAN_MANAGE_RUN on `skywatch_demo_refresh`. Tested headless
+    (button → warning → cancel); *Yes, refresh* not clicked from here.
+  - **DEMO-1:** `scripts/demo_ready.py` warms everything after a READY verdict (each chat tool,
+    managed MCP, a Genie query, both endpoints — 13 steps, ~27 s, all ok); `docs/DEMO_SCRIPT.md`:
+    the before-recording checklist, a 10-step recording path that shows the guards working, the
+    numbers to have ready, and what to do if something breaks on camera.
+  - App redeployed; **SP self-check 14/14 ok** (now including `refresh_status` and the refresh job).

@@ -127,6 +127,47 @@ def diagnose(ws: dbx.Workspace, endpoint: str, steps: list[dict], errors: dict[s
     return text, quote_is_grounded(text, errs + verdict)
 
 
+# ----------------------------------------------------------------------------- warm-up
+GENIE_SPACE = "01f1a7adfd07143d8c92fd72fa8fa48f"
+CHAT_ENDPOINTS = ["databricks-llama-4-maverick", "databricks-meta-llama-3-3-70b-instruct"]
+TOOL_ARGS = {"next_arrivals": "(1)", "aircraft": "('X')", "demand_outlook": "(90.0)", "model_status": "('eta_touchdown')"}
+MCP_HEADERS = {"Accept": "application/json, text/event-stream"}
+
+
+def warm_up(ws: dbx.Workspace, wh: str) -> None:
+    """Touch everything the demo's first questions will touch, so no cold start lands on camera:
+    the first managed-MCP call took 37 s cold, a cold Genie query ~16 s (docs/CHAT_PLAN.md §2).
+    The App's own caches (tool list, Model 1 for explain_eta) warm on the first question asked
+    in the App — the demo script does that before recording."""
+    def step(name, fn):
+        t0 = time.time()
+        try:
+            detail = fn()
+            print(f"  warm-up ok    {name:<34} {detail}  {time.time() - t0:.1f} s", flush=True)
+        except Exception as exc:  # noqa: BLE001 — a warm-up failure is a warning, the refresh verdict stands
+            print(f"  warm-up FAIL  {name:<34} {type(exc).__name__}: {str(exc)[:120]}", flush=True)
+
+    tools = ws.sql(wh, "SELECT routine_name FROM skywatch.information_schema.routines "
+                       "WHERE routine_schema = 'chat' AND routine_type = 'FUNCTION'")["routine_name"].tolist()
+    for t in sorted(tools):
+        step(f"tool {t}", lambda t=t: f"{len(ws.sql(wh, f'SELECT * FROM skywatch.chat.{t}{TOOL_ARGS.get(t, chr(40) + chr(41))}'))} rows")
+
+    def mcp(path, body):
+        import urllib.request
+        req = urllib.request.Request(ws.host + path, data=json.dumps(body).encode(), method="POST", headers={
+            "Authorization": f"Bearer {ws.token()}", "Content-Type": "application/json", **MCP_HEADERS})
+        with urllib.request.urlopen(req, timeout=90) as r:
+            return json.loads(r.read())
+    step("MCP functions tools/list", lambda: f"{len(mcp('/api/2.0/mcp/functions/skywatch/chat', {'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'})['result']['tools'])} tools")
+    step("MCP Genie query", lambda: json.loads(mcp(f"/api/2.0/mcp/genie/{GENIE_SPACE}", {
+        "jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": f"query_space_{GENIE_SPACE}", "arguments": {"query": "How many tables do you have?"}}})
+        ["result"]["content"][0]["text"]).get("status"))
+    for ep in CHAT_ENDPOINTS:
+        step(f"endpoint {ep}", lambda ep=ep: ws.post(f"/serving-endpoints/{ep}/invocations", {
+            "messages": [{"role": "user", "content": "Reply OK"}], "max_tokens": 5})["choices"][0]["message"]["content"][:10])
+
+
 # ------------------------------------------------------------------------------ report
 def report(audit: dict | None, run: dict, retried: bool) -> str:
     steps = step_timings(run)
@@ -160,6 +201,7 @@ def main() -> int:
     ap.add_argument("--endpoint", default="databricks-llama-4-maverick")
     ap.add_argument("--no-retry", action="store_true")
     ap.add_argument("--report-only", action="store_true", help="report the latest refresh, start nothing")
+    ap.add_argument("--no-warmup", action="store_true", help="skip the warm-up after a READY verdict")
     args = ap.parse_args()
 
     ws = dbx.Workspace(args.profile)
@@ -204,6 +246,9 @@ def main() -> int:
     print(report(audit, run, retried))
 
     status = audit["status"] if audit else "NOT_READY"
+    if status != "NOT_READY" and not args.no_warmup and wh:
+        print("\nWarm-up (so no cold start lands on camera):")
+        warm_up(ws, wh)
     if status == "NOT_READY":
         print("\nDiagnosis (LLM agent, from the run's own errors):")
         try:

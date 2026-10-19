@@ -35,6 +35,7 @@ SUGGESTED = [
     "How busy is KATL right now?",
     "Which aircraft lands next?",
     "Is there any emergency or holding right now?",
+    "Is SkyWatch ready, and how fresh is the data?",
     "Will arrivals exceed capacity in the next three hours?",
     "Did the Transformer beat LightGBM?",
     "Which hour of the day is busiest on average?",
@@ -251,6 +252,49 @@ with st.sidebar:
                          + ("" if r["ok"] else f" — {r['detail']}"))
         else:
             st.caption("No self-check result yet.")
+
+    # roadmap DATA-2b: the refresh is a human action with a confirmation — it clears the live
+    # tables and runs ~10 min. The chat model only gets the read-only refresh_status tool.
+    with st.expander("Get SkyWatch ready", expanded=bool(st.session_state.get("refresh_run"))):
+        try:
+            last = data.query("SELECT * FROM skywatch.chat.refresh_status()")
+        except Exception as exc:  # noqa: BLE001
+            last = pd.DataFrame()
+            st.caption(f"refresh status unavailable: {str(exc)[:120]}")
+        if not last.empty:
+            r = last.iloc[0]
+            icon = {"READY": "🟢", "READY_SLOW": "🟡"}.get(r["status"], "🔴")
+            st.write(f"{icon} **{r['status']}** · {r['elapsed_min']:.1f} min · checked {r['checked_at']:%Y-%m-%d %H:%M} UTC")
+            st.caption(f"data as of {r['data_as_of']:%H:%M} UTC · {r['inbound']} inbound · {r['flagged']} flagged")
+        job_id = os.environ.get("SKYWATCH_REFRESH_JOB_ID", "")
+        run_id = st.session_state.get("refresh_run")
+        if run_id:
+            try:
+                run = _w.jobs.get_run(run_id)
+                life = run.state.life_cycle_state.value if run.state.life_cycle_state else "?"
+                result = run.state.result_state.value if run.state.result_state else ""
+                st.write(f"Refresh run {run_id}: **{life}** {result}")
+                st.caption(f"[open the run]({run.run_page_url})")
+                if life in ("TERMINATED", "INTERNAL_ERROR", "SKIPPED"):
+                    st.session_state.pop("refresh_run")
+            except Exception as exc:  # noqa: BLE001
+                st.caption(f"run status unavailable: {str(exc)[:120]}")
+            st.button("Update status", width="stretch")
+        elif job_id:
+            if st.session_state.get("confirm_refresh"):
+                st.warning("This clears today's live picture (predictions, demand forecast, flags) and rebuilds "
+                           "it from a fresh data burst. It takes about 10 minutes. History is kept.")
+                c1, c2 = st.columns(2)
+                if c1.button("Yes, refresh", type="primary", width="stretch"):
+                    st.session_state["refresh_run"] = _w.jobs.run_now(int(job_id)).run_id
+                    st.session_state.pop("confirm_refresh")
+                    st.rerun()
+                if c2.button("Cancel", width="stretch"):
+                    st.session_state.pop("confirm_refresh")
+                    st.rerun()
+            elif st.button("Run refresh…", width="stretch"):
+                st.session_state["confirm_refresh"] = True
+                st.rerun()
 
 st.title("💬 Chat with SkyWatch")
 st.caption(f"Ask about {APT_ICAO} arrivals and SkyWatch's models. Every number in an answer is checked "

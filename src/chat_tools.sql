@@ -87,15 +87,30 @@ RETURN
   ORDER BY generated_at DESC
   LIMIT 1;
 
+CREATE OR REPLACE FUNCTION skywatch.chat.refresh_status()
+RETURNS TABLE (status STRING, elapsed_min DOUBLE, data_as_of TIMESTAMP, inbound INT, flagged INT,
+               briefing_source STRING, reasons STRING, warnings STRING, checked_at TIMESTAMP)
+COMMENT 'The latest pre-interview refresh of SkyWatch (the job that rebuilds today''s live picture): READY, READY_SLOW (over its 10-minute budget) or NOT_READY, how long it took, the data time it produced, inbound and flagged aircraft, and any reasons or warnings. Use it for: is SkyWatch ready, how fresh is the data, when was it last refreshed.'
+RETURN
+  SELECT status, round(elapsed_min, 1), data_as_of, n_inbound, n_flags, briefing_source, reasons, warnings, checked_at
+  FROM skywatch.stream.refresh_audit
+  WHERE apt_icao = 'KATL'
+  ORDER BY checked_at DESC
+  LIMIT 1;
+
 -- ----------------------------------------------------------------------------------- models
 CREATE OR REPLACE FUNCTION skywatch.chat.model_status(model STRING)
 RETURNS TABLE (model_name STRING, gate_verdict STRING, challenger_version BIGINT,
                champion_version_before BIGINT, applied BOOLEAN, reasons STRING, audited_at TIMESTAMP)
-COMMENT 'Promotion-gate history for one SkyWatch model, newest first (last 5): eta_touchdown (Model 1, time to touchdown; the champion is LightGBM, and Transformer challengers were tested against it) or demand_forecast (Model 2, arrival demand). Each row: PASS or HOLD, which challenger version was tested against which champion version, whether it was applied, and why (overall MAE in minutes vs the champion). Use it for: which model is in production, did a challenger such as the Transformer beat LightGBM, how accurate a model is. No rows means no gate run has been recorded for that model.'
+COMMENT 'Promotion-gate history for one SkyWatch model, newest first (last 5): eta_touchdown (Model 1, time to touchdown; "Model 1" also works; the champion is LightGBM, and Transformer challengers were tested against it) or demand_forecast (Model 2, arrival demand). Each row: PASS or HOLD, which challenger version was tested against which champion version, whether it was applied, and why (overall MAE in minutes vs the champion). Use it for: which model is in production, did a challenger such as the Transformer beat LightGBM, how accurate a model is. No rows means no gate run has been recorded for that model.'
 RETURN
   SELECT model_name, gate_verdict, challenger_version, champion_version_before, applied, reasons, audited_at
   FROM skywatch.ml.promotion_audit
-  WHERE model_name LIKE concat('%', trim(model))
+  -- accept what people call them too: "Model 1" / "ETA" -> eta_touchdown, "Model 2" / "demand"
+  WHERE model_name LIKE concat('%', CASE
+          WHEN lower(model) RLIKE 'model ?1|eta|touchdown|arrival.?time' THEN 'eta_touchdown'
+          WHEN lower(model) RLIKE 'model ?2|demand|forecast' THEN 'demand_forecast'
+          ELSE trim(model) END)
   ORDER BY audited_at DESC
   LIMIT 5;
 

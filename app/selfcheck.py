@@ -77,6 +77,13 @@ def run_checks(genie_query: bool = True) -> list[dict]:
         return f"{len(names)} MCP tools, query accepted ({status})"
     add("genie", space or "genie", genie)
 
+    def refresh_job():
+        job_id = os.environ.get("SKYWATCH_REFRESH_JOB_ID", "")
+        if not job_id:
+            raise RuntimeError("SKYWATCH_REFRESH_JOB_ID not set")
+        return f"can see job {_w.jobs.get(int(job_id)).settings.name}"
+    add("job", "demo refresh", refresh_job)
+
     def audit():
         tid = f"selfcheck-{uuid.uuid4().hex[:8]}"
         data.query(f"INSERT INTO {CHAT_SCHEMA}.chat_audit (turn_id, asked_at, source) "
