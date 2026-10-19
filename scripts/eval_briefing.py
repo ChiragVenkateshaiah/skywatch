@@ -6,7 +6,7 @@ every candidate Foundation Model API endpoint, `--samples` times. Reports per en
 grounding-check pass rate, latency p50/p95 and completion tokens, and writes every call (facts
 id, text, check reasons) to a JSONL file for manual review.
 
-No new dependency: plain urllib, with host + token from the Databricks CLI profile.
+No new dependency: plain urllib (scripts/dbx.py), host + token from the Databricks CLI profile.
 
     python scripts/eval_briefing.py --warehouse-id <id> [--profile skywatch] [--samples 3]
 """
@@ -17,7 +17,6 @@ import argparse
 import datetime as dt
 import json
 import statistics
-import subprocess
 import sys
 import time
 import urllib.error
@@ -28,6 +27,8 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import dbx  # noqa: E402  (scripts/dbx.py)
 from lib.briefing import build_facts, build_messages, check_briefing, extract_text  # noqa: E402
 
 CANDIDATES = [
@@ -43,49 +44,9 @@ NUMERIC = {"predicted_eta_min", "horizon_step", "arrivals_so_far", "predicted_me
            "predicted_q90", "severity", "dist_to_apt_nm"}
 
 
-class Workspace:
-    def __init__(self, profile: str):
-        env = json.loads(subprocess.check_output(["databricks", "auth", "env", "--profile", profile]))
-        self.host = env.get("env", env)["DATABRICKS_HOST"].rstrip("/")
-        self.profile = profile
-        self._token, self._expiry = None, 0.0
-
-    def token(self) -> str:
-        if time.time() > self._expiry - 120:
-            t = json.loads(subprocess.check_output(["databricks", "auth", "token", "--profile", self.profile]))
-            self._token, self._expiry = t["access_token"], time.time() + int(t.get("expires_in", 3000))
-        return self._token
-
-    def post(self, path: str, body: dict, timeout: int = 90, retries: int = 5) -> dict:
-        for attempt in range(retries + 1):
-            req = urllib.request.Request(
-                self.host + path, data=json.dumps(body).encode(), method="POST",
-                headers={"Authorization": f"Bearer {self.token()}", "Content-Type": "application/json"},
-            )
-            try:
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    return json.loads(resp.read())
-            except urllib.error.HTTPError as exc:
-                # pay-per-token endpoints have a per-workspace QPS limit (REQUEST_LIMIT_EXCEEDED)
-                if exc.code != 429 or attempt == retries:
-                    raise
-                time.sleep(2 ** attempt)
-
+class Workspace(dbx.Workspace):
     def sql(self, warehouse_id: str, statement: str) -> pd.DataFrame:
-        d = self.post("/api/2.0/sql/statements", {
-            "warehouse_id": warehouse_id, "statement": statement, "wait_timeout": "50s",
-            "catalog": "skywatch", "schema": "stream",
-        })
-        if d["status"]["state"] != "SUCCEEDED":
-            raise RuntimeError(d["status"])
-        cols = [c["name"] for c in d["manifest"]["schema"]["columns"]]
-        df = pd.DataFrame(d.get("result", {}).get("data_array") or [], columns=cols)
-        for c in df.columns:
-            if c.endswith("_ts") or c == "scored_at":
-                df[c] = pd.to_datetime(df[c], utc=True)
-            elif c in NUMERIC:
-                df[c] = pd.to_numeric(df[c])
-        return df
+        return super().sql(warehouse_id, statement, numeric=NUMERIC)
 
 
 # ------------------------------------------------------------------------- fact sheets

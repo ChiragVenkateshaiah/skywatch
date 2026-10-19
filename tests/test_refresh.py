@@ -77,3 +77,73 @@ class TestReadiness:
     def test_slow_task_start_is_reported(self):
         steps = step_timings({"tasks": [_task("score_eta", 0, 770, setup_s=705)]})
         assert _ok(steps=steps).warnings == ["slow task start: score_eta setup 705 s"]
+
+
+# --------------------------------------------------------------------- ops agent (DATA-2)
+from lib.refresh import (  # noqa: E402
+    AUTH, CODE, DATA, TRANSIENT, UNKNOWN, classify_failure, failed_tasks, progress_events,
+)
+
+
+class TestClassifyFailure:
+    def test_platform_blip_is_transient(self):
+        assert classify_failure("The service encountered a transient issue. Retry the run") == TRANSIENT
+
+    def test_qps_limit_is_transient(self):
+        assert classify_failure("REQUEST_LIMIT_EXCEEDED: Exceeded workspace QPS rate limit") == TRANSIENT
+
+    def test_expired_login_is_auth_not_transient(self):
+        assert classify_failure('{"error":"invalid_grant","error_description":"Refresh token is invalid"}') == AUTH
+
+    def test_python_error_is_code(self):
+        assert classify_failure("Traceback (most recent call last):\n KeyError: 'scored_at'") == CODE
+
+    def test_transient_wrapped_in_traceback_is_still_transient(self):
+        assert classify_failure("Traceback ...\nDatabricksError: INTERNAL_ERROR") == TRANSIENT
+
+    def test_readiness_failure_is_data(self):
+        assert classify_failure("RuntimeError: NOT READY: demand forecast: 42 min old (> 15)") == DATA
+
+    def test_empty_is_unknown(self):
+        assert classify_failure(None) == UNKNOWN and classify_failure("") == UNKNOWN
+
+
+class TestProgress:
+    def test_only_changes_are_reported(self):
+        steps = [{"task": "prepare", "state": "SUCCESS"}, {"task": "poll", "state": "RUNNING"}]
+        assert progress_events({"prepare": "SUCCESS"}, steps) == [("poll", "RUNNING")]
+
+    def test_failed_tasks_skip_upstream_failed_and_self(self):
+        steps = [{"task": "gold", "state": "FAILED"}, {"task": "score_eta", "state": "UPSTREAM_FAILED"},
+                 {"task": "check", "state": "FAILED"}]
+        assert failed_tasks(steps) == ["gold"]
+
+
+from lib.refresh import latest_attempts, quote_is_grounded, strip_ansi  # noqa: E402
+
+
+class TestAttemptsAndGrounding:
+    def test_latest_attempt_wins(self):
+        tasks = [{"task_key": "train", "attempt_number": 0, "start_time": 1, "run_id": 10},
+                 {"task_key": "train", "attempt_number": 1, "start_time": 2, "run_id": 11},
+                 {"task_key": "gold", "start_time": 0, "run_id": 12}]
+        assert sorted(t["run_id"] for t in latest_attempts(tasks)) == [11, 12]
+
+    def test_step_timings_has_one_row_per_task(self):
+        run = {"tasks": [_task("train", 0, 60, state="FAILED") | {"attempt_number": 0},
+                         _task("train", 70, 60, state="FAILED") | {"attempt_number": 1}]}
+        assert [s["task"] for s in step_timings(run)] == ["train"]
+
+    def test_strip_ansi(self):
+        assert strip_ansi("\x1b[38;5;241mValueError\x1b[0m: x [43mm") == "ValueError: x m"
+
+    EVIDENCE = "Traceback ...\nValueError: Input contains NaN.\n[Trace ID: 00-45bf]"
+
+    def test_real_quote_is_grounded(self):
+        assert quote_is_grounded('Cause: "ValueError: Input contains NaN." in by_band', self.EVIDENCE)
+
+    def test_invented_quote_is_not_grounded(self):
+        assert not quote_is_grounded('"java.io.FileNotFoundException: /dbfs/mnt/data"', self.EVIDENCE)
+
+    def test_no_quote_is_not_grounded(self):
+        assert not quote_is_grounded("The training failed because of NaNs.", self.EVIDENCE)

@@ -32,6 +32,9 @@ Started 2026-10-18, after the ops-briefing arc (`docs/OPS_BRIEFING_PLAN.md`, PRs
 | Embeddings | `databricks-gte-large-en`, `databricks-bge-large-en` `READY` | endpoint list |
 | Vector Search | API answers, **no endpoints** — not relied on | `GET /api/2.0/vector-search/endpoints` |
 | Genie | 2 SkyWatch spaces exist ("KATL Arrival Manager", "Aviation Assistant") | `GET /api/2.0/genie/spaces` |
+| **Databricks-managed MCP** | **works**: Genie (`/api/2.0/mcp/genie/<space>` → `query_space_…` tool) and UC functions (`/api/2.0/mcp/functions/skywatch/ml`) answer `tools/list` | live probe 2026-10-19 |
+| `ai_query()` in SQL | works on the warehouse (`databricks-llama-4-maverick`) | live probe 2026-10-19 |
+| Agent hosting | Agent Framework deploy needs custom model serving — not on Free Edition (roadmap §13); Agent Bricks not verified. Agents run as our own code. | — |
 | Live pipeline | deployed `PAUSED` (quota) — data only grows when we run it | `databricks.yml` |
 | Data volume | `gold_tracks` 305 MB, `silver_positions` 261 MB, `bronze_aircraft` 176 MB, rest < 30 MB | `DESCRIBE DETAIL` |
 | Refresh timing (2026-10-18) | poller 5.3 min, pipeline ~2.3 min, gold 1.1 min, brief 0.4 min; **scoring ×3 in parallel: 645–705 s *setup* each, 43–68 s execution** | Jobs API |
@@ -48,8 +51,9 @@ Effort: S ≤ 1 day · M 2–4 days · L ≥ 1 week.
 | ID | Capability | Pri | Value | Effort | Depends on | Pick-up trigger | Ships in |
 |---|---|---|---|---|---|---|---|
 | **DATA-1** | Pre-interview refresh job `skywatch_demo_refresh`: preflight → reset live tables → short poller burst → pipeline → gold serving → scoring (sequential) → briefing → readiness check; per-step timings logged | P0 | High — every demo depends on it | M | — | now | Platform v1.1 |
-| **DATA-2** | Ops agent: starts DATA-1, watches each step, reads logs on failure, retries or reports, writes a readiness report ("ready, data as of HH:MM, N aircraft, X min") | P0 | High — one command before an interview | M | DATA-1; agent product check | after DATA-1 runs ≤ 10 min | Platform v1.2 |
-| **CHAT-1** | "Chat with SkyWatch" page in the existing App: Maverick + curated tools (`get_arrival_picture`, `get_aircraft`, `explain_eta`, `get_flags`, `get_briefing`, `get_model_status`, `ask_genie`); grounding check on numeric answers; data-age label from tool results; "how I answered" panel | P0 | High — the headline feature | L | App SP: `serving_endpoint` CAN_QUERY, `genie_space` access (verify) | after DATA-1 | App v2.0 |
+| **DATA-2a** | Local ops agent `scripts/demo_ready.py`: starts DATA-1, prints each task state change, reads the `refresh_audit` verdict, retries a *transient* failure once (Jobs repair), else an LLM diagnosis that must quote the run's real error | P0 | High — one command before an interview | M | DATA-1 | ✅ built 2026-10-19 | Platform v1.2 |
+| **DATA-2b** | In-app "Get SkyWatch ready" action — the same logic as DATA-2a, as a CHAT-1 tool; App SP needs a `job` resource with `CAN_MANAGE_RUN` (verify) | P1 | Medium — demo moment | S–M | CHAT-1, DATA-2a | with CHAT-1 | App v2.0 |
+| **CHAT-1** | "Chat with SkyWatch" page in the existing App: Maverick + curated tools (`get_arrival_picture`, `get_aircraft`, `explain_eta`, `get_flags`, `get_briefing`, `get_model_status`, `ask_genie`); grounding check on numeric answers; data-age label from tool results; "how I answered" panel. **Tools are UC functions served through Databricks-managed MCP** (decided 2026-10-19): written once, used by the chat, the ops agent and Genie; `ask_genie` = the managed Genie MCP tool | P0 | High — the headline feature | L | App SP: `serving_endpoint` CAN_QUERY, `genie_space` access, `EXECUTE` on the UC functions; UC Python functions on this warehouse (verify first) | after DATA-1 | App v2.0 |
 | **CHAT-EVAL-1** | `chat_audit` table (question, tools, answer, check, tokens, latency, prompt version, 👍/👎) + golden set of 50–100 questions (tool-selection accuracy, grounding pass rate, out-of-scope refusals) | P0 | High — "measure, then tune" | M | CHAT-1 | with CHAT-1 | App v2.0 |
 | **CHAT-2** | Knowledge about SkyWatch and its models: docs chunked + embedded (`gte-large-en`) into Delta by a job, in-memory index in the App, `search_docs` tool, answers cite `file §section` | P1 | High — "why/how" questions | M | CHAT-1 | CHAT-1 golden set ≥ 90% tool accuracy | App v2.1 |
 | **CHAT-3** | Genie v2: ground-check Genie answers (show its SQL + rows), route ambiguous questions to curated tools first | P1 | Medium | M | CHAT-1 | `ask_genie` share of turns ≥ 20% or its 👎 rate ≥ 2× curated tools | App v2.2 |
@@ -71,7 +75,7 @@ HOLD is a complete, documented result (as in the M1 Transformer arc).
 ## 4. Execution order
 
 1. **DATA-1** — and test the parallel-setup hypothesis first (it decides the job's shape).
-2. **DATA-2** — starts with a live check of which Databricks agent products Free Edition offers.
+2. **DATA-2a** — ✅ live agent check done (MCP + `ai_query` work, agent hosting doesn't); local ops agent built.
 3. **CHAT-1 + CHAT-EVAL-1** — one arc; the golden set is written before the prompt is tuned.
 4. **CHAT-2**, then **OPT-1/2/3** against the CHAT-EVAL-1 numbers, then **CHAT-3**.
 5. **P2 model items** as their triggers fire; **AGENT-ML** with the first of them.
@@ -81,7 +85,7 @@ HOLD is a complete, documented result (as in the M1 Transformer arc).
 | Thing | Scheme | Where it is recorded |
 |---|---|---|
 | App | `v1.x` dashboard + briefing (today) · `v2.0` chat · `v2.1` knowledge · `v2.2` Genie v2 | App caption + `CHANGELOG.md` |
-| Platform jobs | `v1.1` refresh · `v1.2` ops agent · `v1.3` experiment agent | `CHANGELOG.md` |
+| Platform jobs | `v1.1` refresh · `v1.2` ops agent (local) · `v1.3` experiment agent | `CHANGELOG.md` |
 | Models | UC registry versions + `@champion` / `@challenger`, promotion gate | `promotion_audit` |
 | Prompts / tool sets | `prompt_version` string (e.g. `chat-v2.0.1`) | every `chat_audit` / `ops_briefings` row |
 
@@ -90,3 +94,13 @@ HOLD is a complete, documented result (as in the M1 Transformer arc).
 - At the end of every arc (as part of its last PR).
 - When a trigger in §3 fires — the item moves to P1.
 - Before an interview: DATA-1/DATA-2 must be green; nothing else blocks a demo.
+
+## 7. Lessons that apply to every agent item
+
+- **Code decides, the model explains.** In DATA-2a the retry decision is a deterministic
+  classifier; the LLM only writes the diagnosis.
+- **Evidence in, grounding checked out.** Given tools to fetch the evidence itself, Maverick once
+  wrote a fake tool call as text and invented an error that wasn't in the run
+  (`docs/DEMO_REFRESH_PLAN.md` §4). Every agent answer must be checked against the evidence it
+  was given — numbers for the briefing, a quoted error line for the diagnosis — with a plain
+  fallback when the check fails. CHAT-1's tool loop needs the same guard.
