@@ -1,0 +1,123 @@
+# SkyWatch — pre-interview refresh (docs/DEMO_REFRESH_PLAN.md, roadmap DATA-1).
+# One fresh live picture in <= 10 min: preflight -> reset live tables -> poller burst -> Bronze/
+# Silver pipeline -> Gold (serving) -> M1 -> M2 -> M3 -> ops briefing -> readiness check.
+# History is kept; only predictions / demand_forecast / irregularity_flags are cleared.
+#
+#   databricks bundle run skywatch_demo_refresh -t dev --profile skywatch
+#
+# Tasks run strictly one after another: started in parallel, serverless tasks waited
+# 645-705 s each in setup (measured 2026-10-18); alone, the same task's setup was 4 s.
+# No schedule — run on demand only.
+
+resources:
+  jobs:
+    skywatch_demo_refresh:
+      name: skywatch-demo-refresh
+      max_concurrent_runs: 1
+      timeout_seconds: 1500
+      tags:
+        project: skywatch
+        component: ops
+
+      tasks:
+        - task_key: prepare
+          notebook_task:
+            notebook_path: ../src/demo_refresh_prepare.py
+            base_parameters:
+              catalog: ${var.catalog}
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              briefing_endpoint: ${var.briefing_endpoint}
+              reset: "true"
+
+        - task_key: poll
+          depends_on: [{task_key: prepare}]
+          notebook_task:
+            notebook_path: ../src/poller.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.core_schema}
+              volume: ${var.landing_volume}
+              apt_icao: ${var.apt_icao}
+              apt_lat: ${var.apt_lat}
+              apt_lon: ${var.apt_lon}
+              radius_nm: ${var.radius_nm}
+              poll_seconds: ${var.refresh_poll_seconds}
+              poll_interval_seconds: ${var.poll_interval_seconds}
+              api_base_url: ${var.api_base_url}
+              source_name: ${var.source_name}
+
+        - task_key: medallion
+          depends_on: [{task_key: poll}]
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.skywatch_medallion.id}
+            full_refresh: false
+
+        - task_key: gold
+          depends_on: [{task_key: medallion}]
+          notebook_task:
+            notebook_path: ../src/build_gold.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.stream_schema}
+              apt_elev_ft: ${var.apt_elev_ft}
+              mode: serving
+              serving_hours: ${var.gold_serving_hours}
+              serving_anchor_ts: ""
+
+        - task_key: score_eta
+          depends_on: [{task_key: gold}]
+          notebook_task:
+            notebook_path: ../src/score_eta.py
+            base_parameters:
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              model_name: ${var.catalog}.ml.eta_touchdown
+              model_alias: champion
+              max_dist_nm: "120"
+              freshness_min: "20"
+
+        - task_key: score_demand
+          depends_on: [{task_key: score_eta}]
+          notebook_task:
+            notebook_path: ../src/score_demand.py
+            base_parameters:
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              model_name: ${var.catalog}.ml.demand_forecast
+              model_alias: champion
+              apt_icao: ${var.apt_icao}
+              horizon_bins: ${var.demand_horizon_bins}
+              score_date: ""
+              as_of_bin: ""
+
+        - task_key: score_irregularities
+          depends_on: [{task_key: score_demand}]
+          notebook_task:
+            notebook_path: ../src/score_irregularities.py
+            base_parameters:
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              apt_icao: ${var.apt_icao}
+              apt_elev_ft: ${var.apt_elev_ft}
+
+        - task_key: brief
+          depends_on: [{task_key: score_irregularities}]
+          notebook_task:
+            notebook_path: ../src/brief_ops.py
+            base_parameters:
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              apt_icao: ${var.apt_icao}
+              aar_per_hour: ${var.apt_aar_per_hour}
+              endpoint: ${var.briefing_endpoint}
+
+        - task_key: check
+          depends_on: [{task_key: brief}]
+          run_if: ALL_DONE
+          notebook_task:
+            notebook_path: ../src/demo_refresh_check.py
+            base_parameters:
+              stream_schema: ${var.catalog}.${var.stream_schema}
+              apt_icao: ${var.apt_icao}
+              job_run_id: "{{job.run_id}}"
+              budget_min: "10"
+              max_age_min: "15"
+
+      queue:
+        enabled: true
