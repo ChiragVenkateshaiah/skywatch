@@ -25,11 +25,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dbx  # noqa: E402
-from lib.chat import APP_TOOLS, compact, genie_ask, run_turn, uc_call_sql, uc_tool_specs  # noqa: E402
+from lib.chat import (  # noqa: E402
+    APP_TOOLS, SNAPSHOT, ToolCall, compact, genie_ask, run_turn, uc_call_sql, uc_tool_specs,
+)
 
 GENIE_SPACE = "01f1a7adfd07143d8c92fd72fa8fa48f"   # "SkyWatch — KATL Arrival Manager"
 REFUSAL = ("can't", "cannot", "can not", "unable", "not able", "only help", "can only", "i can answer",
-           "outside", "not something i", "i'm sorry", "i am sorry", "i can help with", "i'm skywatch")
+           "outside", "not something i", "i'm sorry", "i am sorry", "i can help with", "i'm skywatch",
+           "don't have the ability", "can't share", "cannot share", "not able to share")
 
 
 class Tools:
@@ -57,6 +60,24 @@ class Tools:
         return compact(cols, (d.get("result") or {}).get("data_array") or [])
 
 
+def fetch_snapshot(tools: Tools) -> tuple[list[ToolCall], float]:
+    """The live snapshot, fetched in parallel like the App does (it caches it for 60 s, so in a
+    demo most turns reuse it — the eval fetches once and reuses it for every item)."""
+    t0 = time.time()
+
+    def one(name_args):
+        name, args = name_args
+        c = ToolCall(name, dict(args), prefetched=True)
+        try:
+            c.result = tools.execute(name, args)
+        except Exception as exc:  # noqa: BLE001
+            c.error = str(exc)[:200]
+        return c
+    with ThreadPoolExecutor(len(SNAPSHOT)) as pool:
+        calls = list(pool.map(one, SNAPSHOT))
+    return calls, time.time() - t0
+
+
 def llm_for(ws: dbx.Workspace, endpoint: str):
     def llm(messages, schemas):
         return ws.post(f"/serving-endpoints/{endpoint}/invocations",
@@ -67,6 +88,8 @@ def llm_for(ws: dbx.Workspace, endpoint: str):
 def score(item: dict, turns: list, mention_value: str | None) -> dict:
     t = turns[-1]
     called = {c.name for tr in turns for c in tr.calls}
+    if "*" in item.get("forbid_tools", []):   # the snapshot is there for every turn; only real calls count
+        called = {c.name for tr in turns for c in tr.calls if not c.prefetched}
     tools_ok = True
     for want in item.get("expect_tools", []):
         tools_ok &= any(w in called for w in want.split("|"))
@@ -97,12 +120,13 @@ def mention_value(item: dict, turns: list) -> str | None:
     return None
 
 
-def run_item(item: dict, tools: Tools, llm) -> dict:
+def run_item(item: dict, tools: Tools, llm, snapshot: list[ToolCall]) -> dict:
     t0 = time.time()
-    first = run_turn(item["question"], llm=llm, execute=tools.execute, tools=tools.specs)
+    first = run_turn(item["question"], llm=llm, execute=tools.execute, tools=tools.specs, prefetched=snapshot)
     turns = [first]
     if item.get("followup"):
-        turns.append(run_turn(item["followup"], llm=llm, execute=tools.execute, tools=tools.specs, history=[first]))
+        turns.append(run_turn(item["followup"], llm=llm, execute=tools.execute, tools=tools.specs,
+                              history=[first], prefetched=snapshot))
     s = score(item, turns, mention_value(item, turns))
     t = turns[-1]
     return {"id": item["id"], **s, "seconds": round(time.time() - t0, 1), "rounds": sum(x.rounds for x in turns),
@@ -123,6 +147,7 @@ def main() -> None:
     ap.add_argument("--only", default="", help="comma-separated item ids")
     ap.add_argument("--workers", type=int, default=2)
     ap.add_argument("--out", default="eval_chat.jsonl")
+    ap.add_argument("--snapshot", action="store_true", help="prefetch the live snapshot (roadmap OPT-1)")
     args = ap.parse_args()
 
     ws = dbx.Workspace(args.profile)
@@ -136,10 +161,12 @@ def main() -> None:
         for k in ("question", "followup"):
             if i.get(k):
                 i[k] = i[k].replace("{cs0}", cs[0] if cs else "DAL1").replace("{cs1}", cs[1] if len(cs) > 1 else "DAL2")
-    print(f"{len(items)} items · {len(tools.specs)} tools · endpoint {args.endpoint} · callsigns {cs[:2]}")
+    snapshot, snap_s = fetch_snapshot(tools) if args.snapshot else ([], 0.0)
+    print(f"{len(items)} items · {len(tools.specs)} tools · endpoint {args.endpoint} · callsigns {cs[:2]}"
+          + (f" · snapshot {len(snapshot)} calls in {snap_s:.1f} s" if args.snapshot else ""))
 
     with ThreadPoolExecutor(args.workers) as pool:
-        results = list(pool.map(lambda i: run_item(i, tools, llm_for(ws, args.endpoint)), items))
+        results = list(pool.map(lambda i: run_item(i, tools, llm_for(ws, args.endpoint), snapshot), items))
     with open(args.out, "w") as f:
         for r in results:
             f.write(json.dumps(r) + "\n")
@@ -153,7 +180,9 @@ def main() -> None:
           f"\n| mentions tool value | {rate('mentions_ok')} |\n| nudged / repaired | "
           f"{sum(r['nudged'] for r in results)} / {sum(r['repaired'] for r in results)} |"
           f"\n| latency p50 / p95 s | {statistics.median(secs):.1f} / {secs[min(len(secs) - 1, int(0.95 * len(secs)))]:.1f} |"
-          f"\n| tokens per item p50 | {statistics.median(r['tokens'] for r in results):.0f} |")
+          f"\n| tokens per item p50 | {statistics.median(r['tokens'] for r in results):.0f} |"
+          f"\n| model rounds per item p50 / mean | {statistics.median(r['rounds'] for r in results):.0f} / "
+          f"{statistics.mean(r['rounds'] for r in results):.2f} |")
     fails = [r for r in results if not r["pass"]]
     print(f"\n{len(fails)} failing items:")
     for r in fails:

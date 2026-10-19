@@ -23,7 +23,12 @@ from databricks.sdk import WorkspaceClient
 
 import data
 import model as m1
-from lib.chat import APP_TOOLS, PROMPT_VERSION, compact, data_as_of, genie_ask, run_turn, uc_call_sql, uc_tool_specs
+from concurrent.futures import ThreadPoolExecutor
+
+from lib.chat import (
+    APP_TOOLS, PROMPT_VERSION, SNAPSHOT, ToolCall, compact, data_as_of, genie_ask, run_turn, uc_call_sql,
+    uc_tool_specs,
+)
 
 CHAT_ENDPOINT = os.environ.get("SKYWATCH_CHAT_ENDPOINT", "databricks-llama-4-maverick")
 FALLBACK_ENDPOINT = os.environ.get("SKYWATCH_CHAT_FALLBACK_ENDPOINT", "databricks-meta-llama-3-3-70b-instruct")
@@ -76,6 +81,26 @@ def load_model():
         return m1.load_eta_model()
     except Exception as exc:  # noqa: BLE001 — explain_eta reports it; the rest of the chat works
         return (None, str(exc))
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def live_snapshot() -> list[ToolCall]:
+    """The tools that answer most questions, fetched in parallel and shared by every visitor for
+    60 s (roadmap OPT-1): a question they cover is answered in one model round instead of two."""
+    by_name = {s.name: s for s in load_tools()}
+
+    def one(name_args):
+        name, args = name_args
+        c = ToolCall(name, dict(args), prefetched=True)
+        t0 = time.monotonic()
+        try:
+            c.result = compact(*data.query_raw(uc_call_sql(by_name[name], args)))
+        except Exception as exc:  # noqa: BLE001 — a failed snapshot call is left out, the model can still call it
+            c.error = str(exc)[:200]
+        c.seconds = time.monotonic() - t0
+        return c
+    with ThreadPoolExecutor(len(SNAPSHOT)) as pool:
+        return list(pool.map(one, [s for s in SNAPSHOT if s[0] in by_name]))
 
 
 @st.cache_data(ttl=60)
@@ -190,14 +215,18 @@ def render(entry: dict) -> None:
         st.markdown(t.answer)
         badge = ("✅ checked against the tool results" if t.source == "llm"
                  else "⚠️ no checked answer — showing the tool results instead")
-        parts = [badge, _age(entry["as_of"]), f"{entry['total_seconds']:.1f} s",
+        # an answer with no number, time or callsign states no data facts (a refusal, "what does
+        # Model 2 do?") — the live snapshot's age would only confuse it
+        states_data = any(ch.isdigit() for ch in t.answer)
+        parts = [badge, _age(entry["as_of"]) if states_data else "", f"{entry['total_seconds']:.1f} s",
                  entry["endpoint"] if entry["endpoint"] != CHAT_ENDPOINT else ""]
         st.caption(" · ".join(p for p in parts if p))
         with st.expander("How I answered"):
             if not t.calls:
                 st.write("No tool was needed.")
             for c in t.calls:
-                st.markdown(f"**{c.name}**({', '.join(f'{k}={v!r}' for k, v in c.args.items())}) · {c.seconds:.1f} s")
+                st.markdown(f"**{c.name}**({', '.join(f'{k}={v!r}' for k, v in c.args.items())}) · "
+                            + ("live snapshot, fetched before the question" if c.prefetched else f"{c.seconds:.1f} s"))
                 if c.error:
                     st.error(c.error)
                 elif isinstance(c.result, dict) and c.result.get("columns"):
@@ -323,7 +352,8 @@ if question:
     with st.status("Looking it up…", expanded=True) as status:
         try:
             turn = run_turn(question, llm=make_llm(used), execute=make_execute(specs, status.write),
-                            tools=specs, history=[e["turn"] for e in st.session_state["chat"]])
+                            tools=specs, history=[e["turn"] for e in st.session_state["chat"]],
+                            prefetched=live_snapshot())
             status.update(label="Done", state="complete", expanded=False)
         except Exception as exc:  # noqa: BLE001 — endpoint down / warehouse error: say so, keep the page
             status.update(label="Something went wrong", state="error")
