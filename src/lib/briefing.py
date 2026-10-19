@@ -70,7 +70,9 @@ def _demand(fc: pd.DataFrame | None, aar_per_hour: float) -> dict[str, Any] | No
     peak = int(mean.to_numpy().argmax())
     peak_mean = round(float(mean.iloc[peak]), 1)
     return {
-        "arrivals_so_far_today": int(round(float(fc["arrivals_so_far"].iloc[0]))),
+        # landings SkyWatch *observed* today: slots it wasn't collecting count as 0 in
+        # score_demand.py, so after a short burst this is far below the airport's real count
+        "arrivals_seen_by_skywatch_today": int(round(float(fc["arrivals_so_far"].iloc[0]))),
         "predicted_next_hour": int(round(float(mean.head(60 // BIN_MINUTES).sum()))),
         "horizon_hours": round(len(fc) * BIN_MINUTES / 60),
         "peak_15min_start_utc": pd.to_datetime(fc["bin_start_ts"].iloc[peak], utc=True).strftime("%H:%M"),
@@ -155,7 +157,8 @@ def prompt_facts(facts: dict[str, Any]) -> dict[str, Any]:
 SYSTEM_PROMPT = """You write the ops briefing for an airport arrival coordinator.
 Terms:
 - AAR (airport acceptance rate) is capacity: the most arrivals the airport can take per hour (aar_per_hour) or per 15 minutes (aar_per_15min). It is not a forecast and not a count.
-- "inbound" aircraft are still in the air. "arrivals_so_far_today" have already landed.
+- "inbound" aircraft are still in the air.
+- "arrivals_seen_by_skywatch_today" counts only landings SkyWatch observed while it was collecting data; it is NOT the airport's total for the day. If you mention it, say "SkyWatch has seen N landings today", never "N arrivals so far today".
 - "predicted" values are the forecast; "upper" values are the high end of its range, not the expected value.
 - "headroom" is capacity minus the predicted peak; negative means over capacity.
 - "bins" are 15-minute periods.

@@ -80,7 +80,7 @@ class TestBuildFacts:
         assert d["peak_15min_predicted"] == 20.1
         assert d["peak_15min_headroom"] == round(22.5 - 20.1, 1)
         assert d["horizon_hours"] == 3
-        assert d["arrivals_so_far_today"] == 212
+        assert d["arrivals_seen_by_skywatch_today"] == 212
 
     def test_surge_bins_counted_against_aar_per_bin(self):
         f = _facts(fc=_fc([24.0, 23.0, 20.0, 10.0], uppers=[27, 26, 23, 12]))
