@@ -207,3 +207,37 @@ class TestMeaningRules:
     def test_unrelated_today_sentence_is_not_flagged(self):
         llm = FakeLLM(_tool_msg(("demand_outlook", {})), _text_msg("The forecast peaks at 15:00 with 12.7 today."))
         assert run_turn("q", llm=llm, execute=_exec_demand, tools=DTOOLS).source == "llm"
+
+
+class TestSnapshot:
+    def _snap(self):
+        return [ToolCall("arrival_picture", {}, PICTURE, prefetched=True),
+                ToolCall("next_arrivals", {"n": 5}, NEXT, prefetched=True)]
+
+    def test_snapshot_answer_in_one_round(self):
+        llm = FakeLLM(_text_msg("Next is DAL3100 at 14:57; 113 aircraft are inbound."))
+        turn = run_turn("Which aircraft lands next?", llm=llm, execute=_execute, tools=TOOLS, prefetched=self._snap())
+        assert turn.rounds == 1 and turn.source == "llm" and turn.check.passed
+        assert [c.name for c in turn.calls] == ["arrival_picture", "next_arrivals"]
+        roles = [m["role"] for m in llm.seen[0]]
+        assert roles == ["system", "user", "assistant", "tool", "tool"]
+        assert llm.seen[0][2]["tool_calls"][1]["function"]["arguments"] == '{"n": 5}'
+
+    def test_question_outside_the_snapshot_still_calls_a_tool(self):
+        llm = FakeLLM(_tool_msg(("arrival_picture", {})), _text_msg("113 aircraft are inbound."))
+        turn = run_turn("q", llm=llm, execute=_execute, tools=TOOLS, prefetched=self._snap()[1:])
+        assert [c.name for c in turn.calls] == ["next_arrivals", "arrival_picture"] and turn.rounds == 2
+
+    def test_failed_or_unknown_snapshot_calls_are_left_out(self):
+        snap = [ToolCall("arrival_picture", {}, error="warehouse asleep", prefetched=True),
+                ToolCall("not_a_tool", {}, {"x": 1}, prefetched=True)]
+        llm = FakeLLM(_text_msg("Hello."))
+        turn = run_turn("hi", llm=llm, execute=_execute, tools=TOOLS, prefetched=snap)
+        assert turn.calls == [] and [m["role"] for m in llm.seen[0]] == ["system", "user"]
+
+
+def test_data_as_of_prefers_this_questions_calls_over_the_snapshot():
+    snap = ToolCall("arrival_picture", {}, compact(["scored_at"], [["2026-10-19T15:01:20Z"]]), prefetched=True)
+    gate = ToolCall("model_status", {}, compact(["gate_verdict"], [["HOLD"]]))
+    assert data_as_of([snap, gate]) is None          # answered from the gate history: no live-data age
+    assert data_as_of([snap]) == "2026-10-19T15:01:20Z"   # answered from the snapshot
