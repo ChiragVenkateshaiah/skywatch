@@ -290,6 +290,8 @@ def data_as_of(calls: list[ToolCall]) -> str | None:
         r = c.result
         if not isinstance(r, dict):
             continue
+        if r.get("scored_at") and r["scored_at"] != "None":   # a tool's top-level stamp (explain_eta)
+            stamps.append(str(r["scored_at"]))
         cols = r.get("columns") or []
         for key in ("scored_at", "generated_at"):
             if key in cols:

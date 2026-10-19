@@ -140,3 +140,26 @@ vary by ~3 items even at temperature 0). Only then does CHAT-2 start.
   needs only `EXECUTE`, so the tools are the only data door the chat has. (2) **Tool calls take
   0.8–1.0 s from inside the App vs 1.6–2.1 s from a laptop** (network round trip): the local
   golden-set latency overstates the chat's real latency.
+
+- **2026-10-19 — step 5: the chat page.** `app/app.py` is now a router (`st.navigation`):
+  `dashboard.py` (the former `app.py`, unchanged apart from the page config) and `chat.py`.
+  The chat page runs `lib.chat.run_turn` — the code the golden set scores — with the chat
+  endpoint and a fallback endpoint on error (OPT-3), UC tools by direct SQL (`data.query_raw`),
+  `explain_eta` from the in-process champion with plain-English feature names, and `ask_genie`
+  via managed MCP. UI: live progress per tool call, a "checked / fallback" badge, the data-age
+  label from the tools' `scored_at`, "How I answered" (tools, arguments, rows, Genie's SQL,
+  rounds, tokens, timings, repairs), suggested questions, 👍/👎, and a Tool-status panel read from
+  the startup self-check file. One `chat_audit` row per turn, written with **parameterised** SQL
+  (`data.execute`) — tested with a question full of quotes and `DROP TABLE`, stored as text.
+
+  Packaging: the App deploys only `app/`, and `bundle deploy` does not upload files behind a
+  symlink (tested), so `scripts/sync_app_lib.py` copies `src/lib/chat.py` + `grounding.py` into
+  `app/lib/` with a GENERATED header; `tests/test_app_lib_sync.py` fails on any drift.
+
+  Headless test of the page (Streamlit `AppTest`, real tools + endpoint), four turns, all
+  `✅ checked`: "Which aircraft lands next?" → DAL3100, 14:57 UTC (5.2 s); follow-up "Why does the
+  model predict that for it?" → resolved from history, top contributions in plain words (13.1 s,
+  of which 8.5 s the first model download); "What's the weather in Paris?" → declined, no tools
+  (3.5 s); "Is any aircraft holding right now?" → the 5 callsigns (5.5 s). All four `chat_audit`
+  rows written. Deployed; the SP self-check after deploy: 12/12 ok. Not done from here: driving
+  the *deployed* page as the SP (needs a browser login) — the self-check covers its dependencies.

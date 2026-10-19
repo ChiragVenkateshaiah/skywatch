@@ -89,7 +89,16 @@ def run_checks(genie_query: bool = True) -> list[dict]:
 
 
 if __name__ == "__main__":
-    for r in run_checks():
+    import datetime as dt
+
+    results = run_checks()
+    for r in results:
         print(f"SELFCHECK {'ok  ' if r['ok'] else 'FAIL'}  {r['kind']:<8} {r['name']:<38} {r['detail']}  "
               f"{r['seconds']} s", flush=True)
+    try:  # the chat page's "Tool status" panel reads this
+        with open(os.environ.get("SKYWATCH_SELFCHECK_FILE", "/tmp/skywatch_selfcheck.json"), "w") as f:
+            json.dump({"checked_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+                       "results": results}, f)
+    except OSError as exc:
+        print(f"SELFCHECK could not write the result file: {exc}", flush=True)
     print("SELFCHECK done", flush=True)
