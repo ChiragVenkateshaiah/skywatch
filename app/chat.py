@@ -231,7 +231,7 @@ def render(entry: dict) -> None:
                     st.error(c.error)
                 elif isinstance(c.result, dict) and c.result.get("columns"):
                     st.dataframe(pd.DataFrame(c.result["rows"], columns=c.result["columns"]),
-                                 hide_index=True, width="stretch")
+                                 hide_index=True, use_container_width=True)
                     if c.result.get("sql"):
                         st.code(c.result["sql"], language="sql")
                     if c.result.get("answer"):
@@ -260,7 +260,7 @@ st.session_state.setdefault("chat", [])
 with st.sidebar:
     st.subheader("Chat with SkyWatch")
     st.caption(f"Model: `{CHAT_ENDPOINT}` (fallback `{FALLBACK_ENDPOINT}`) · prompt {PROMPT_VERSION}")
-    if st.button("New conversation", width="stretch"):
+    if st.button("New conversation", use_container_width=True):
         st.session_state["chat"] = []
         st.rerun()
     with st.expander("Tool status"):
@@ -308,20 +308,20 @@ with st.sidebar:
                     st.session_state.pop("refresh_run")
             except Exception as exc:  # noqa: BLE001
                 st.caption(f"run status unavailable: {str(exc)[:120]}")
-            st.button("Update status", width="stretch")
+            st.button("Update status", use_container_width=True)
         elif job_id:
             if st.session_state.get("confirm_refresh"):
                 st.warning("This clears today's live picture (predictions, demand forecast, flags) and rebuilds "
                            "it from a fresh data burst. It takes about 10 minutes. History is kept.")
                 c1, c2 = st.columns(2)
-                if c1.button("Yes, refresh", type="primary", width="stretch"):
+                if c1.button("Yes, refresh", type="primary", use_container_width=True):
                     st.session_state["refresh_run"] = _w.jobs.run_now(int(job_id)).run_id
                     st.session_state.pop("confirm_refresh")
                     st.rerun()
-                if c2.button("Cancel", width="stretch"):
+                if c2.button("Cancel", use_container_width=True):
                     st.session_state.pop("confirm_refresh")
                     st.rerun()
-            elif st.button("Run refresh…", width="stretch"):
+            elif st.button("Run refresh…", use_container_width=True):
                 st.session_state["confirm_refresh"] = True
                 st.rerun()
 
@@ -336,7 +336,7 @@ question = st.chat_input("Ask SkyWatch…")
 if not st.session_state["chat"]:
     cols = st.columns(3)
     for i, q in enumerate(SUGGESTED):
-        if cols[i % 3].button(q, width="stretch", key=f"suggest_{i}"):
+        if cols[i % 3].button(q, use_container_width=True, key=f"suggest_{i}"):
             question = q
 
 if question:
