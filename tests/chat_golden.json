@@ -352,8 +352,8 @@
     "search_docs|model_health|model_status"
    ],
    "must_contain_any": [
-    "model_health",
-    "health"
+    "health",
+    "monitoring"
    ]
   },
   {

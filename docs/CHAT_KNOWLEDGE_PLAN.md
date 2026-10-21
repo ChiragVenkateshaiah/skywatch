@@ -38,8 +38,8 @@ Entry gate (roadmap): CHAT-1 golden set ≥ 90% on three consecutive runs — me
   cite one as `FILE.md §Section`, and may cite only files it returned
   (`lib.docs_index.citation_problems`) — one repair round, then the fallback. Numbers in a
   passage are evidence for the existing grounding check.
-- Prompt `chat-v2.2.0`: one rule — for how / why questions about SkyWatch, call search_docs and
-  cite the source.
+- Prompt `chat-v2.2.1`: one rule — for how / why / where-to-look questions about SkyWatch, call
+  search_docs (even when a data tool also applies) and cite the source.
 - Same code everywhere: `lib.docs_index` is copied into `app/lib/` (`scripts/sync_app_lib.py`);
   `scripts/eval_chat.py` runs search_docs against the same table and endpoint.
 
@@ -55,8 +55,8 @@ Entry gate (roadmap): CHAT-1 golden set ≥ 90% on three consecutive runs — me
 2. Golden set: 6 `doc-*` items (44 total). ✅
 3. `python scripts/index_docs.py --warehouse-id …` — live. ✅
 4. `eval_chat.py --snapshot --only doc-01,…,doc-06` — the new items first. ✅ (§6)
-5. Grant + deploy; SELFCHECK 15/15; one doc question in the App.
-6. Ship rule: full golden set ≥ 90% on three consecutive runs (quota: ~3 × 44 items).
+5. Ship rule: full golden set ≥ 90% on three consecutive runs. ✅ (§6)
+6. Grant + deploy; SELFCHECK 15/15; one doc question in the App.
 
 ## 6. Progress log
 
@@ -74,3 +74,20 @@ Entry gate (roadmap): CHAT-1 golden set ≥ 90% on three consecutive runs — me
   Transformer ship" from `model_status` (accepted — the gate verdict is the source of truth),
   "where should I look first" from `model_health`, and "how does the chat check numbers" from
   its own instructions (both kept as failures).
+
+- **2026-10-21 — ship rule met.** `GRANT SELECT ON TABLE skywatch.chat.doc_chunks` to the App SP.
+  Prompt `chat-v2.2.1` (the search_docs rule also covers where-to-look questions and applies
+  "even when a data tool also applies"). Full golden set, 44 items, `--snapshot`:
+
+  | Run | Pass | Tool sel. | Grounded | Refusal | Repairs | p50 / p95 s | Model calls |
+  |---|---|---|---|---|---|---|---|
+  | 1 | 43/44 (44/44 rescored) | 44/44 | 42/42 | 5/5 | 4 | 4.2 / 16.5 | 72 |
+  | 2 | 43/44 | 44/44 | 41/42 | 5/5 | 4 | 3.4 / 12.5 | 72 |
+  | 3 | 42/44 | 43/44 | 41/42 | 5/5 | 2 | 3.7 / 13.0 | 67 |
+
+  Run 1's only failure was a golden-set defect: doc-05 required the word `model_health`, which
+  the grounding check forbids (no raw key names) — the answer said "monitoring checks" and cited
+  `RUNBOOKS.md §Incident`; the item now accepts "health" / "monitoring". Run 3 needed `--force`:
+  OPT-4 skipped it as unchanged, as designed. The weak spot is the same two items (doc-05,
+  doc-06): the model sometimes skips search_docs or doesn't cite after the repair — the guard
+  then shows the tool rows, never an unchecked answer. The CHAT-1 items stayed at 38/38.
