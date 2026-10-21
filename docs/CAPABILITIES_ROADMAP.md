@@ -69,7 +69,7 @@ Effort: S ≤ 1 day · M 2–4 days · L ≥ 1 week.
 | **AGENT-ML** | Experiment agent: proposes a feature/hyper-parameter change, runs the train job, runs the gate, writes the audit summary — a human approves any `apply=true` | P2 | Medium | M | M1-WX or M2-FT exists to try | first P2 model item starts | Platform v1.3 |
 | **M1-TX** | Revisit the Transformer with regularisation and a larger validation window | P3 | Low now | M | DATA-3 | ≥ 60 days of arrivals (it overfit at today's size, `docs/M1_TRANSFORMER_PLAN.md`) | M1 vNext |
 | **M3-LEARN** | Learned Model 3 (one-vs-rest) | P3 | Medium later | L | M3-LBL | label count reaches classifier scale (roadmap §7) | M3 v3 |
-| **APP-1** | Minimal dashboard (decided 2026-10-19): freshness pill, 4 KPIs (inbound, next 3 h vs capacity, peak headroom, alerts), the briefing card, **one map** (alerts as rings), one demand chart, and "Ask SkyWatch" buttons that open the chat with the question asked. Removed — the chat answers them: click-to-predict, arrival-sequence table, surge list, second map + Model 3 history, the red/orange alert boxes that read as app errors | P0 | High — what an interviewer sees first | S | CHAT-1 | 🟡 built + tested headless 2026-10-19, **not deployed** (warehouse quota, §8) | App v2.2 |
+| **APP-1** | Minimal dashboard (decided 2026-10-19): freshness pill, 4 KPIs (inbound, next 3 h vs capacity, peak headroom, alerts), the briefing card, **one map** (alerts as rings), one demand chart, and "Ask SkyWatch" buttons that open the chat with the question asked. Removed — the chat answers them: click-to-predict, arrival-sequence table, surge list, second map + Model 3 history, the red/orange alert boxes that read as app errors | P0 | High — what an interviewer sees first | S | CHAT-1 | ✅ deployed 2026-10-21 (SELFCHECK 14/14, checked in a browser) | App v2.2 |
 | **OPT-4** | Quota-aware evaluation: the golden set is the biggest single compute cost (~40 tool SQL calls + ~60 model calls per run, 15+ runs on 2026-10-19). Run it only on prompt / tool / loop changes; cache tool results per run | P1 | Medium — keeps Free Edition usable | S | CHAT-EVAL-1 | the 2026-10-19 quota stop (§8) | Platform |
 | **SMALL-1** | KPI tile headroom (+18.2, unrounded peak) vs briefing (18.3, rounded peak) — use one rounding | P3 | Low | S | — | next time `app/app.py` KPIs are touched | App v2.x |
 
@@ -134,6 +134,12 @@ no exceptions, no error/warning boxes, 4 KPIs, briefing, map, chart, 3 "Ask SkyW
 3. `bundle deploy` + `bundle run skywatch_arrival_manager`; `apps logs … | grep SELFCHECK` (expect
    14/14); open the App in a browser once — dashboard, an Ask button, the chat answer.
 4. Open the APP-1 PR, merge, then OPT-4 before any further golden-set runs; then CHAT-2.
+
+**Resumed 2026-10-21:** the warehouse started again (`SELECT 1` ok). Steps 1–3 done: the
+hand-over test passed in two halves — the dashboard's Ask button sets `pending_question`; the
+chat page with it preset gave one turn, Maverick, 1 round, grounding check passed, 5.4 s.
+APP-1 deployed: SELFCHECK 14/14, dashboard → Ask → chat answer checked in a browser. The data
+is still as of 2026-10-19 15:01 UTC (schedules paused) — run the refresh before a demo.
 
 Local test setup to remember: the App's Streamlit is **1.38.0** — test in a venv with exactly that
 (`AppTest` there needs `PYTHONPATH=app`); the Spark tests need a JDK (CI has one).
