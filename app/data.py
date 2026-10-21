@@ -132,43 +132,6 @@ def latest_irregularity_flags(apt_icao: str) -> pd.DataFrame:
     )
 
 
-def historical_irregularity_counts(apt_icao: str) -> pd.DataFrame:
-    """`gold_irregularities` counts by kind, across every collected day — the evidence
-    behind Model 3's "rules, not a learned model" call (see roadmap §7)."""
-    return query(
-        f"""
-        SELECT kind, count(*) AS n
-        FROM gold_irregularities
-        WHERE apt_icao = '{apt_icao}'
-        GROUP BY kind
-        """
-    )
-
-
-def historical_hourly_profile(apt_icao: str) -> pd.DataFrame:
-    """Mean arrivals per 15-min bin by UTC hour, across every collected day."""
-    return query(
-        f"""
-        SELECT hour_utc, avg(arrivals) AS avg_arrivals_per_bin
-        FROM gold_demand_15m
-        WHERE apt_icao = '{apt_icao}'
-        GROUP BY hour_utc
-        ORDER BY hour_utc
-        """
-    )
-
-
-def coverage_today(apt_icao: str) -> pd.DataFrame:
-    """First / last report SkyWatch holds for today (UTC) — what "arrivals seen today" can cover."""
-    return query(
-        f"""
-        SELECT min(snapshot_ts) AS first_ts, max(snapshot_ts) AS last_ts
-        FROM gold_tracks
-        WHERE apt_icao = '{apt_icao}' AND snapshot_ts >= current_date()
-        """
-    )
-
-
 def latest_briefing(apt_icao: str) -> pd.DataFrame:
     """Newest LLM ops briefing (src/brief_ops.py) — one row: the text, which path wrote it
     (`llm` / `template`), and the data-age columns the panel renders itself."""

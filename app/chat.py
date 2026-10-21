@@ -332,7 +332,7 @@ st.caption(f"Ask about {APT_ICAO} arrivals and SkyWatch's models. Every number i
 for e in st.session_state["chat"]:
     render(e)
 
-question = st.chat_input("Ask SkyWatch…")
+question = st.chat_input("Ask SkyWatch…") or st.session_state.pop("pending_question", None)  # from the dashboard
 if not st.session_state["chat"]:
     cols = st.columns(3)
     for i, q in enumerate(SUGGESTED):
