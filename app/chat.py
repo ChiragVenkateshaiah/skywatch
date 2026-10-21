@@ -4,7 +4,7 @@ The turn loop and every guard are lib.chat.run_turn (a copy of src/lib/chat.py �
 scripts/sync_app_lib.py), the same code the golden set evaluates. This page supplies:
   * the LLM call — the chat endpoint, falling back to the second endpoint on an error (OPT-3)
   * the tools — UC functions in skywatch.chat by direct SQL, explain_eta from the in-process
-    champion, ask_genie through Databricks-managed MCP
+    champion, ask_genie through Databricks-managed MCP, search_docs over the docs index (CHAT-2)
   * the UI — progress while tools run, the data-age label, "How I answered", 👍/👎
   * the audit — one parameterised row per turn in skywatch.chat.chat_audit
 """
@@ -25,6 +25,7 @@ import data
 import model as m1
 from concurrent.futures import ThreadPoolExecutor
 
+from lib import docs_index
 from lib.chat import (
     APP_TOOLS, PROMPT_VERSION, SNAPSHOT, ToolCall, compact, data_as_of, genie_ask, run_turn, uc_call_sql,
     uc_tool_specs,
@@ -73,6 +74,21 @@ def load_tools():
     if not GENIE_SPACE:
         specs = [s for s in specs if s.name != "ask_genie"]
     return specs
+
+
+@st.cache_resource(ttl=3600)
+def load_docs():
+    """The docs index (skywatch.chat.doc_chunks, written by scripts/index_docs.py): ~200 passages,
+    searched in memory. Loaded once; search_docs reports it if the table can't be read."""
+    try:
+        return docs_index.DocIndex.from_rows(data.query_raw(docs_index.LOAD_SQL)[1])
+    except Exception as exc:  # noqa: BLE001 — search_docs reports it; the rest of the chat works
+        return str(exc)[:200]
+
+
+def embed(texts: list[str]) -> list[list[float]]:
+    return docs_index.embed_response(_w.api_client.do(
+        "POST", f"/serving-endpoints/{docs_index.EMBED_ENDPOINT}/invocations", body={"input": texts}))
 
 
 @st.cache_resource
@@ -134,6 +150,11 @@ def make_execute(specs, progress):
                  + (" — Genie takes about 20 s" if name == "ask_genie" else ""))
         if name == "explain_eta":
             return explain_eta(args.get("callsign", ""))
+        if name == "search_docs":
+            index = load_docs()
+            if isinstance(index, str):
+                raise RuntimeError(f"the docs index is not available: {index}")
+            return index.search(args.get("query", ""), embed)
         if name == "ask_genie":
             return genie_ask(lambda path, body: _w.api_client.do("POST", path, body=body, headers=_MCP_HEADERS),
                              GENIE_SPACE, str(args.get("question", "")))

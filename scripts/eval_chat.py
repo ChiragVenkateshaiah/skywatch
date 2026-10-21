@@ -9,6 +9,7 @@ value from the named tool's result), latency and tokens. Writes every turn to a 
 
 `explain_eta` needs the in-process model, which lives in the App; here it returns an error, so
 those items measure tool selection only. `ask_genie` is real (Genie through managed MCP, ~20 s).
+`search_docs` is real: the same index table and embedding endpoint as the App (CHAT-2).
 
 Quota-aware (roadmap OPT-4, src/lib/eval_cache.py): a full run whose inputs (turn loop, grounding,
 tool SQL, golden set, this script, endpoint) match the last full run prints that result and stops
@@ -31,14 +32,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dbx  # noqa: E402
-from lib import eval_cache  # noqa: E402
+from lib import docs_index, eval_cache  # noqa: E402
 from lib.chat import (  # noqa: E402
     APP_TOOLS, SNAPSHOT, ToolCall, compact, genie_ask, run_turn, uc_call_sql, uc_tool_specs,
 )
 
 CACHE_DIR = ROOT / ".eval_cache"                    # git-ignored
 FINGERPRINT_FILES = [ROOT / "src" / "lib" / "chat.py", ROOT / "src" / "lib" / "grounding.py",
-                     ROOT / "src" / "chat_tools.sql", Path(__file__).resolve()]
+                     ROOT / "src" / "lib" / "docs_index.py", ROOT / "src" / "chat_tools.sql",
+                     Path(__file__).resolve()] + [ROOT / f for f in docs_index.CORPUS]
 GENIE_SPACE = "01f1a7adfd07143d8c92fd72fa8fa48f"   # "SkyWatch — KATL Arrival Manager"
 REFUSAL = ("can't", "cannot", "can not", "unable", "not able", "only help", "can only", "i can answer",
            "outside", "not something i", "i'm sorry", "i am sorry", "i can help with", "i'm skywatch",
@@ -56,6 +58,18 @@ class Tools:
             "FROM skywatch.information_schema.parameters WHERE specific_schema = 'chat'"))
         self.specs = uc_tool_specs(r, p) + APP_TOOLS
         self.by_name = {s.name: s for s in self.specs}
+        self._docs = None
+
+    def docs(self) -> docs_index.DocIndex:
+        if self._docs is None:
+            rows = self.cache.get("_doc_chunks", {}, lambda: [
+                [r["source"], r["text"], r["embedding"]] for r in self._sql(docs_index.LOAD_SQL)])
+            self._docs = docs_index.DocIndex.from_rows(rows)
+        return self._docs
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return docs_index.embed_response(self.ws.post(
+            f"/serving-endpoints/{docs_index.EMBED_ENDPOINT}/invocations", {"input": texts}))
 
     def _sql(self, statement: str) -> list[dict]:
         self.sql_calls += 1
@@ -68,6 +82,8 @@ class Tools:
         spec = self.by_name[name]
         if name == "explain_eta":
             raise RuntimeError("explain_eta runs only inside the App (the model is loaded there)")
+        if name == "search_docs":
+            return self.docs().search(args.get("query", ""), self.embed)
         if name == "ask_genie":
             return genie_ask(lambda path, body: self.ws.post(path, body, timeout=120),
                              GENIE_SPACE, str(args.get("question", "")))
