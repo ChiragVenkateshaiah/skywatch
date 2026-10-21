@@ -66,3 +66,55 @@ no gap: every START follows an END, and anything done between them is recorded i
      dashboard, one Ask button, the chat answer. Then open + merge the APP-1 PR.
   4. ~~Merge the `chore/day-commands` PR~~ — done (#51).
   5. OPT-4 (quota-aware evaluation) before any further golden-set run; then CHAT-2.
+
+<!-- checkpoint type=END ts=2026-10-21T09:12Z -->
+## 2026-10-21 · END · 09:12 UTC
+
+- **Since:** START 06:09 UTC
+- **Done (merged to `main`):**
+  - #52 minimal one-screen dashboard with Ask SkyWatch hand-over (APP-1, App v2.2)
+  - #53 quota-aware golden-set eval (OPT-4) — skips unchanged full runs (`--force`), caches tool
+    results per data version (`--fresh-tools`), prints tool SQL / cache hits / model calls
+  - #54 `search_docs` — the chat answers how/why from the docs, cited and checked (CHAT-2)
+  - #55 roadmap: CHAT-2 marked done
+- **From the session (not in git):**
+  - Warehouse started again (user ran `warehouses start`; RUNNING, `SELECT 1` ok) — the
+    2026-10-19 quota blocker is gone. App restarted (user ran `bundle run`).
+  - APP-1 hand-over test passed in two halves (Streamlit 1.38.0); deployed 06:30, SELFCHECK
+    14/14; user checked dashboard → Ask → chat answer in a browser.
+  - OPT-4 live check, one item twice: tool SQL 7 → 1 on frozen data.
+  - CHAT-2: index built with `scripts/index_docs.py` — 207 passages in `skywatch.chat.doc_chunks`.
+    Hit the embedding QPS limit (batch 16 → REQUEST_LIMIT_EXCEEDED) → batches of 4 + pause.
+    A 256-word passage measured 550 tokens (gte reads 512) → a 1,500-char cap per passage.
+    `GRANT SELECT ON TABLE skywatch.chat.doc_chunks` to the App SP. Prompt `chat-v2.2.1`.
+  - Golden set 44 items, three runs: 43/44 (44/44 rescored), 43/44, 42/44 — ship rule met; the
+    38 CHAT-1 items 38/38 in all three; ~210 model calls, 9 tool SQL calls (cache).
+  - Deployed 08:01 from `chat/knowledge`: SELFCHECK 15/15 (new `docs` line: 207 passages).
+    User checked "How does Model 1 predict landing times?" in a browser — cited
+    `[ML_ROADMAP.md §Model 1 — Time-to-touchdown (ETA)]`.
+- **In progress:** nothing. No branch with commits outside `main`; no open PRs; `main` clean.
+  Uncommitted: none.
+- **Decisions:**
+  - CHAT-2 index: a local script → Delta, not a bundle job (the bundle doesn't sync `*.md`;
+    serverless job starts waited ~11 min).
+  - CHAT-2 corpus: README + 12 docs; without `DEMO_SCRIPT.md` and `SKYWATCH_MLOPS_ARTICLE.md`.
+  - Golden items doc-02 / doc-03 / doc-05 widened where the answers were right (doc-05 had
+    required a key name the grounding check forbids).
+- **Blockers / risks:**
+  - Data is still as of 2026-10-19 15:01 UTC (last refresh SUCCESS 2026-10-19 14:52) — run the
+    refresh before any demo.
+  - The App's compute is still ACTIVE (it uses quota while it runs).
+  - doc-05 / doc-06 are flaky: the model sometimes skips search_docs or doesn't cite — the guard
+    then falls back to the tool rows.
+  - `index_docs.py` must be re-run after a doc change in the corpus, then the App restarted.
+- **Live state:** App RUNNING / compute ACTIVE (deployment `01f1cd25b5e5`, 08:02 UTC);
+  warehouse STOPPED (auto-stop); refresh job has no schedule (other schedules not re-checked
+  today — PAUSED on 2026-10-19); CLI auth OK (token expiry 10:13 UTC, refreshes on use).
+- **Next:**
+  1. Decide whether to stop the App's compute to save quota until the next demo
+     (`databricks apps stop skywatch-arrival-manager --profile skywatch`).
+  2. Before a demo: run the refresh (App → *Get SkyWatch ready*, or `scripts/demo_ready.py`),
+     then check the freshness pill.
+  3. Pick the next roadmap item: CHAT-3 (Genie v2) waits for its trigger (`ask_genie` share
+     ≥ 20% or 👎 rate ≥ 2×); else OPT-2 or the doc-05 / doc-06 tool-choice weakness.
+  4. Golden-set runs only after a prompt / tool / loop change; OPT-4 skips the rest.
