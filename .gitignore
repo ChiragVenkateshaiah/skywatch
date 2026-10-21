@@ -5,3 +5,4 @@ __pycache__/
 .env
 _backfill/
 _backfill_download.log
+.eval_cache/

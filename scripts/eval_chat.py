@@ -9,6 +9,12 @@ value from the named tool's result), latency and tokens. Writes every turn to a 
 
 `explain_eta` needs the in-process model, which lives in the App; here it returns an error, so
 those items measure tool selection only. `ask_genie` is real (Genie through managed MCP, ~20 s).
+
+Quota-aware (roadmap OPT-4, src/lib/eval_cache.py): a full run whose inputs (turn loop, grounding,
+tool SQL, golden set, this script, endpoint) match the last full run prints that result and stops
+— no warehouse or model call; `--force` re-runs. Tool results are cached on disk while the data
+version (the live picture's `scored_at`) and the tool SQL don't change, so a re-run on frozen
+data pays only for model calls; `--fresh-tools` ignores the cache.
 """
 
 from __future__ import annotations
@@ -25,10 +31,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dbx  # noqa: E402
+from lib import eval_cache  # noqa: E402
 from lib.chat import (  # noqa: E402
     APP_TOOLS, SNAPSHOT, ToolCall, compact, genie_ask, run_turn, uc_call_sql, uc_tool_specs,
 )
 
+CACHE_DIR = ROOT / ".eval_cache"                    # git-ignored
+FINGERPRINT_FILES = [ROOT / "src" / "lib" / "chat.py", ROOT / "src" / "lib" / "grounding.py",
+                     ROOT / "src" / "chat_tools.sql", Path(__file__).resolve()]
 GENIE_SPACE = "01f1a7adfd07143d8c92fd72fa8fa48f"   # "SkyWatch — KATL Arrival Manager"
 REFUSAL = ("can't", "cannot", "can not", "unable", "not able", "only help", "can only", "i can answer",
            "outside", "not something i", "i'm sorry", "i am sorry", "i can help with", "i'm skywatch",
@@ -36,22 +46,32 @@ REFUSAL = ("can't", "cannot", "can not", "unable", "not able", "only help", "can
 
 
 class Tools:
-    def __init__(self, ws: dbx.Workspace, wh: str):
-        self.ws, self.wh = ws, wh
-        r = ws.sql(wh, "SELECT routine_name, comment FROM skywatch.information_schema.routines "
-                       "WHERE routine_schema = 'chat'")
-        p = ws.sql(wh, "SELECT specific_name, parameter_name, data_type, ordinal_position "
-                       "FROM skywatch.information_schema.parameters WHERE specific_schema = 'chat'")
-        self.specs = uc_tool_specs(r.to_dict("records"), p.to_dict("records")) + APP_TOOLS
+    def __init__(self, ws: dbx.Workspace, wh: str, cache: eval_cache.ToolCache):
+        self.ws, self.wh, self.cache = ws, wh, cache
+        self.sql_calls = 0
+        r = cache.get("_routines", {}, lambda: self._sql(
+            "SELECT routine_name, comment FROM skywatch.information_schema.routines WHERE routine_schema = 'chat'"))
+        p = cache.get("_parameters", {}, lambda: self._sql(
+            "SELECT specific_name, parameter_name, data_type, ordinal_position "
+            "FROM skywatch.information_schema.parameters WHERE specific_schema = 'chat'"))
+        self.specs = uc_tool_specs(r, p) + APP_TOOLS
         self.by_name = {s.name: s for s in self.specs}
 
+    def _sql(self, statement: str) -> list[dict]:
+        self.sql_calls += 1
+        return self.ws.sql(self.wh, statement).to_dict("records")
+
     def execute(self, name: str, args: dict):
+        return self.cache.get(name, args, lambda: self._execute(name, args))
+
+    def _execute(self, name: str, args: dict):
         spec = self.by_name[name]
         if name == "explain_eta":
             raise RuntimeError("explain_eta runs only inside the App (the model is loaded there)")
         if name == "ask_genie":
             return genie_ask(lambda path, body: self.ws.post(path, body, timeout=120),
                              GENIE_SPACE, str(args.get("question", "")))
+        self.sql_calls += 1
         d = self.ws.post("/api/2.0/sql/statements", {"warehouse_id": self.wh, "statement": uc_call_sql(spec, args),
                                                      "wait_timeout": "50s"})
         if d["status"]["state"] != "SUCCEEDED":
@@ -78,8 +98,21 @@ def fetch_snapshot(tools: Tools) -> tuple[list[ToolCall], float]:
     return calls, time.time() - t0
 
 
+def data_version(ws: dbx.Workspace, wh: str) -> str:
+    """One cheap probe: when Model 1 last scored the live picture. Every refresh moves it."""
+    d = ws.post("/api/2.0/sql/statements", {"warehouse_id": wh, "wait_timeout": "50s",
+                                            "statement": "SELECT max(scored_at) FROM skywatch.chat.arrival_picture()"})
+    if d["status"]["state"] != "SUCCEEDED":
+        raise RuntimeError(d["status"].get("error", {}).get("message", d["status"]["state"])[:200])
+    return str(((d.get("result") or {}).get("data_array") or [[None]])[0][0])
+
+
+MODEL_CALLS = [0]
+
+
 def llm_for(ws: dbx.Workspace, endpoint: str):
     def llm(messages, schemas):
+        MODEL_CALLS[0] += 1
         return ws.post(f"/serving-endpoints/{endpoint}/invocations",
                        {"messages": messages, "tools": schemas, "temperature": 0, "max_tokens": 700})
     return llm
@@ -148,10 +181,23 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=2)
     ap.add_argument("--out", default="eval_chat.jsonl")
     ap.add_argument("--snapshot", action="store_true", help="prefetch the live snapshot (roadmap OPT-1)")
+    ap.add_argument("--force", action="store_true", help="run even if nothing changed since the last full run")
+    ap.add_argument("--fresh-tools", action="store_true", help="ignore the tool-result cache (still writes it)")
     args = ap.parse_args()
 
+    fp = eval_cache.fingerprint(FINGERPRINT_FILES + [Path(args.golden)],
+                                [args.endpoint, f"snapshot={args.snapshot}"])
+    stamp_file = CACHE_DIR / "last_run.json"
+    if eval_cache.should_skip(eval_cache.load_stamp(stamp_file), fp, force=args.force, partial=bool(args.only)):
+        print(f"Nothing changed since the last full run (fingerprint {fp}) — not re-running; --force to "
+              f"run anyway. That run:\n{eval_cache.load_stamp(stamp_file)['summary']}")
+        return
+
     ws = dbx.Workspace(args.profile)
-    tools = Tools(ws, args.warehouse_id)
+    version = data_version(ws, args.warehouse_id)
+    cache = eval_cache.ToolCache(CACHE_DIR / "tools.json", version,
+                                 eval_cache.fingerprint([ROOT / "src" / "chat_tools.sql"]), reuse=not args.fresh_tools)
+    tools = Tools(ws, args.warehouse_id, cache)
     nxt = tools.execute("next_arrivals", {"n": 5})
     cs = [r[nxt["columns"].index("callsign")] for r in nxt["rows"]]
     items = json.load(open(args.golden))["items"]
@@ -170,19 +216,24 @@ def main() -> None:
     with open(args.out, "w") as f:
         for r in results:
             f.write(json.dumps(r) + "\n")
+    cache.save()
 
     def rate(key):
         vals = [r[key] for r in results if r.get(key) is not None]
         return f"{sum(vals)}/{len(vals)}" if vals else "—"
     secs = sorted(r["seconds"] for r in results)
-    print(f"\n| metric | value |\n|---|---|\n| pass (all checks) | {rate('pass')} |\n| tool selection | {rate('tools_ok')} |"
+    summary = (f"\n| metric | value |\n|---|---|\n| pass (all checks) | {rate('pass')} |\n| tool selection | {rate('tools_ok')} |"
           f"\n| grounded answer (no fallback) | {rate('grounded')} |\n| refusal on out-of-scope | {rate('refusal_ok')} |"
           f"\n| mentions tool value | {rate('mentions_ok')} |\n| nudged / repaired | "
           f"{sum(r['nudged'] for r in results)} / {sum(r['repaired'] for r in results)} |"
           f"\n| latency p50 / p95 s | {statistics.median(secs):.1f} / {secs[min(len(secs) - 1, int(0.95 * len(secs)))]:.1f} |"
           f"\n| tokens per item p50 | {statistics.median(r['tokens'] for r in results):.0f} |"
           f"\n| model rounds per item p50 / mean | {statistics.median(r['rounds'] for r in results):.0f} / "
-          f"{statistics.mean(r['rounds'] for r in results):.2f} |")
+          f"{statistics.mean(r['rounds'] for r in results):.2f} |"
+          f"\n| compute: tool SQL / cache hits / model calls | {tools.sql_calls + 1} / {cache.hits} / {MODEL_CALLS[0]} |")
+    print(f"data version {version} · tool cache {'reused' if cache.reused else 'new'}" + summary)
+    if not args.only:
+        eval_cache.save_stamp(stamp_file, fp, summary)
     fails = [r for r in results if not r["pass"]]
     print(f"\n{len(fails)} failing items:")
     for r in fails:
