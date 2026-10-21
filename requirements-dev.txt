@@ -11,3 +11,4 @@ pandas>=2,<3
 numpy>=1.26
 scipy>=1.11
 ruff>=0.6
+mlflow-tracing==3.17.2   # scripts/demo_ready.py writes each refresh run as a trace (OPT-2)

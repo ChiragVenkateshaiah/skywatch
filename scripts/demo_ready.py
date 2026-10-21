@@ -13,6 +13,10 @@ What it does:
   4. still not ready -> an LLM (Foundation Model API) gets the failed tasks' real errors and
      writes a short diagnosis + one fix, which must quote the real error line or the raw error is
      shown instead. The retry decision is code, never the model's.
+  5. writes the run as one MLflow trace (roadmap OPT-2): run > task > setup / execution, at the
+     run's real timestamps, into the bundle's `skywatch-traces` experiment — no compute. Also
+     with --report-only, so a refresh started from the App gets traced too; a run is traced once.
+     Needs `mlflow-tracing` (requirements-dev.txt); without it this step is skipped.
 
 Exit code 0 = READY or READY_SLOW, 1 = NOT_READY.
 """
@@ -21,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -31,9 +36,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dbx  # noqa: E402
+from lib import tracing  # noqa: E402
 from lib.refresh import (  # noqa: E402
     TRANSIENT, classify_failure, failed_tasks, latest_attempts, progress_events, quote_is_grounded,
-    step_timings, strip_ansi,
+    step_timings, strip_ansi, trace_spans,
 )
 
 JOB_KEY = "skywatch_demo_refresh"
@@ -41,7 +47,7 @@ DONE = {"TERMINATED", "INTERNAL_ERROR", "SKIPPED"}
 QUIET = {"BLOCKED", "PENDING", "QUEUED"}  # waiting states — not worth a line each
 
 
-def bundle_ids(profile: str, target: str) -> tuple[int, str]:
+def bundle_ids(profile: str, target: str) -> tuple[int, str, str | None]:
     out = subprocess.check_output(
         ["databricks", "bundle", "summary", "-t", target, "--profile", profile, "-o", "json"],
         cwd=ROOT, stderr=subprocess.DEVNULL,
@@ -49,7 +55,29 @@ def bundle_ids(profile: str, target: str) -> tuple[int, str]:
     s = json.loads(out)
     job_id = s["resources"]["jobs"][JOB_KEY]["id"]
     wh = s.get("variables", {}).get("warehouse_id", {}).get("value")
-    return int(job_id), wh
+    exp = s["resources"].get("experiments", {}).get("skywatch_traces", {}).get("id")
+    return int(job_id), wh, exp
+
+
+def trace_run(profile: str, experiment: str | None, run: dict) -> str:
+    """One trace per finished run (OPT-2); skipped if this run already has one."""
+    try:
+        import mlflow
+    except ImportError:
+        return "not traced (pip install -r requirements-dev.txt for mlflow-tracing)"
+    if not run.get("end_time"):
+        return "not traced (run still going)"
+    os.environ.setdefault("DATABRICKS_CONFIG_PROFILE", profile)
+    if not tracing.setup(experiment):
+        return "not traced (no skywatch-traces experiment — bundle deploy creates it)"
+    try:
+        if len(mlflow.search_traces(filter_string=f"tags.run_id = '{run['run_id']}'", max_results=1)):
+            return "already traced"
+        tid = tracing.write_plan(trace_spans(run), {"kind": "refresh", "run_id": str(run["run_id"])})
+        mlflow.flush_trace_async_logging()
+        return f"traced as {tid}"
+    except Exception as exc:  # noqa: BLE001 — the report matters more than its trace
+        return f"not traced ({type(exc).__name__}: {str(exc)[:120]})"
 
 
 def elapsed(t0: float) -> str:
@@ -202,13 +230,14 @@ def main() -> int:
     ap.add_argument("--no-retry", action="store_true")
     ap.add_argument("--report-only", action="store_true", help="report the latest refresh, start nothing")
     ap.add_argument("--no-warmup", action="store_true", help="skip the warm-up after a READY verdict")
+    ap.add_argument("--trace-experiment", help="MLflow experiment id or path (default: the bundle's skywatch-traces)")
     args = ap.parse_args()
 
     ws = dbx.Workspace(args.profile)
-    job_id, wh = args.job_id, args.warehouse_id
-    if not (job_id and wh):
-        b_job, b_wh = bundle_ids(args.profile, args.target)
-        job_id, wh = job_id or b_job, wh or b_wh
+    job_id, wh, exp = args.job_id, args.warehouse_id, args.trace_experiment
+    if not (job_id and wh and exp):
+        b_job, b_wh, b_exp = bundle_ids(args.profile, args.target)
+        job_id, wh, exp = job_id or b_job, wh or b_wh, exp or b_exp
     t0 = time.time()
 
     if args.report_only:
@@ -244,6 +273,7 @@ def main() -> int:
 
     audit = latest_audit(ws, wh, run_id) if wh else None
     print(report(audit, run, retried))
+    print(f"  trace: {trace_run(args.profile, exp, run)}")
 
     status = audit["status"] if audit else "NOT_READY"
     if status != "NOT_READY" and not args.no_warmup and wh:

@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from lib.refresh import NOT_READY, READY, READY_SLOW, readiness, step_timings
+from lib.refresh import NOT_READY, READY, READY_SLOW, readiness, step_timings, trace_spans
 
 T0 = 1_792_307_000_000
 
@@ -147,3 +147,25 @@ class TestAttemptsAndGrounding:
 
     def test_no_quote_is_not_grounded(self):
         assert not quote_is_grounded("The training failed because of NaNs.", self.EVIDENCE)
+
+
+class TestTraceSpans:
+    def test_run_task_and_phases_with_real_times(self):
+        run = {"run_id": 7, "start_time": T0, "end_time": T0 + 700_000, "state": {"result_state": "SUCCESS"},
+               "tasks": RUN["tasks"] + [{"task_key": "brief", "state": {"life_cycle_state": "SKIPPED"}}]}
+        spans = trace_spans(run)
+        assert [s["name"] for s in spans] == ["refresh run 7", "task prepare", "setup", "execution",
+                                             "task poll", "setup", "execution", "task check", "setup"]
+        root, poll = spans[0], spans[4]
+        assert (root["start_ms"], root["end_ms"], root["attrs"]["result_state"]) == (T0, T0 + 700_000, "SUCCESS")
+        assert (poll["parent"], poll["start_ms"], poll["end_ms"]) == (0, T0 + 30_000, T0 + 220_000)
+        assert poll["attrs"] == {"state": "SUCCESS", "attempt": 0, "setup_s": 4, "exec_s": 186}
+        setup, execution = spans[5], spans[6]
+        assert setup["parent"] == execution["parent"] == 4
+        assert (setup["end_ms"], execution["start_ms"], execution["end_ms"]) == (T0 + 34_000, T0 + 34_000, T0 + 220_000)
+        # a running task (no end_time, no execution yet) ends with the run and has no execution span
+        assert spans[7]["end_ms"] == T0 + 700_000 and spans[8]["name"] == "setup"
+
+    def test_run_without_times_uses_its_tasks(self):
+        spans = trace_spans({"run_id": 1, "tasks": [_task("prepare", 0, 30)]})
+        assert (spans[0]["start_ms"], spans[0]["end_ms"]) == (T0, T0 + 30_000)

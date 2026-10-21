@@ -19,6 +19,10 @@ Guards on every turn, each learned in an earlier arc:
   * an answer built on search_docs passages must cite one as `FILE.md §Section`, and only files
     that search_docs returned (lib.docs_index.citation_problems) — same repair / fallback;
   * at most MAX_ROUNDS LLM calls per turn.
+
+Tracing (roadmap OPT-2): `run_turn(..., span=...)` opens one span per model round, tool call and
+check. `span(name, kind)` is any context manager factory whose value has `set_attributes(dict)`;
+the App passes MLflow's, the default does nothing — so this module stays free of MLflow.
 """
 
 from __future__ import annotations
@@ -26,8 +30,9 @@ from __future__ import annotations
 import json
 import re
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, ContextManager, Iterator
 
 from lib import docs_index, grounding
 
@@ -187,6 +192,16 @@ class Turn:
     prompt_version: str = PROMPT_VERSION
 
 
+class _NoSpan:
+    def set_attributes(self, attributes: dict[str, Any]) -> None:
+        pass
+
+
+@contextmanager
+def no_span(name: str, kind: str) -> Iterator[_NoSpan]:
+    yield _NoSpan()
+
+
 def looks_like_text_tool_call(text: str, tool_names: list[str]) -> bool:
     t = text or ""
     if any(m in t for m in ("<|python_tag|>", "<tool_call>", '"tool_calls"', "function_call")):
@@ -223,6 +238,7 @@ def run_turn(
     prefetched: list[ToolCall] = (),
     max_rounds: int = MAX_ROUNDS,
     clock: Callable[[], float] = time.monotonic,
+    span: Callable[[str, str], ContextManager[Any]] = no_span,
 ) -> Turn:
     """`llm(messages, tool_schemas)` returns an `llm/v1/chat` response dict; `execute(name, args)`
     returns a JSON-able result or raises. History is passed as plain text turns (earlier answers
@@ -253,14 +269,18 @@ def run_turn(
 
     while turn.rounds < max_rounds:
         turn.rounds += 1
-        t0 = clock()
-        resp = llm(messages, schemas)
-        turn.llm_seconds += clock() - t0
-        usage = resp.get("usage") or {}
-        turn.prompt_tokens += int(usage.get("prompt_tokens") or 0)
-        turn.completion_tokens += int(usage.get("completion_tokens") or 0)
-        msg = resp["choices"][0]["message"]
-        tool_calls = msg.get("tool_calls") or []
+        with span(f"model round {turn.rounds}", "CHAT_MODEL") as sp:
+            t0 = clock()
+            resp = llm(messages, schemas)
+            turn.llm_seconds += clock() - t0
+            usage = resp.get("usage") or {}
+            turn.prompt_tokens += int(usage.get("prompt_tokens") or 0)
+            turn.completion_tokens += int(usage.get("completion_tokens") or 0)
+            msg = resp["choices"][0]["message"]
+            tool_calls = msg.get("tool_calls") or []
+            sp.set_attributes({"messages": len(messages), "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+                               "completion_tokens": int(usage.get("completion_tokens") or 0),
+                               "tool_calls": [tc["function"]["name"] for tc in tool_calls]})
 
         if tool_calls:
             messages.append({"role": "assistant", "content": _text(msg), "tool_calls": tool_calls})
@@ -271,15 +291,19 @@ def run_turn(
                 except json.JSONDecodeError:
                     args = {}
                 call = ToolCall(fn["name"], args)
-                t0 = clock()
-                if fn["name"] not in names:
-                    call.error = f"unknown tool {fn['name']}"
-                else:
-                    try:
-                        call.result = execute(fn["name"], args)
-                    except Exception as exc:  # noqa: BLE001 — the model sees the error and can recover
-                        call.error = f"{type(exc).__name__}: {str(exc)[:200]}"
-                call.seconds = clock() - t0
+                with span(f"tool {fn['name']}", "TOOL") as sp:
+                    t0 = clock()
+                    if fn["name"] not in names:
+                        call.error = f"unknown tool {fn['name']}"
+                    else:
+                        try:
+                            call.result = execute(fn["name"], args)
+                        except Exception as exc:  # noqa: BLE001 — the model sees the error and can recover
+                            call.error = f"{type(exc).__name__}: {str(exc)[:200]}"
+                    call.seconds = clock() - t0
+                    sp.set_attributes({"args": json.dumps(args), "error": call.error or "",
+                                       "row_count": call.result.get("row_count", -1)
+                                       if isinstance(call.result, dict) else -1})
                 turn.tool_seconds += call.seconds
                 turn.calls.append(call)
                 content = {"error": call.error} if call.error else call.result
@@ -295,15 +319,18 @@ def run_turn(
             messages += [{"role": "assistant", "content": text}, {"role": "user", "content": NUDGE}]
             continue
 
-        allowed = grounding.harvest([c.result for c in turn.calls if c.result is not None]).merge(base)
-        turn.check = grounding.check_text(text, allowed, MAX_WORDS, source="tool results")
-        cites = docs_index.citation_problems(text, [c.result for c in turn.calls if c.name == "search_docs"
-                                                     and isinstance(c.result, dict)])
-        if cites:
-            turn.check = grounding.CheckResult(False, turn.check.reasons + cites)
-        for trigger, required, instruction in MEANING_RULES:
-            if trigger.search(text) and not required.search(text):
-                turn.check = grounding.CheckResult(False, turn.check.reasons + [f"meaning: {instruction}"])
+        with span("check", "PARSER") as sp:
+            allowed = grounding.harvest([c.result for c in turn.calls if c.result is not None]).merge(base)
+            turn.check = grounding.check_text(text, allowed, MAX_WORDS, source="tool results")
+            cites = docs_index.citation_problems(text, [c.result for c in turn.calls if c.name == "search_docs"
+                                                         and isinstance(c.result, dict)])
+            if cites:
+                turn.check = grounding.CheckResult(False, turn.check.reasons + cites)
+            for trigger, required, instruction in MEANING_RULES:
+                if trigger.search(text) and not required.search(text):
+                    turn.check = grounding.CheckResult(False, turn.check.reasons + [f"meaning: {instruction}"])
+            sp.set_attributes({"passed": turn.check.passed, "reasons": turn.check.reasons[:5],
+                               "repair_round": turn.repaired})
         if turn.check.passed:
             turn.answer, turn.source = text, "llm"
             return turn

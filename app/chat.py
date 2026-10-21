@@ -7,6 +7,7 @@ scripts/sync_app_lib.py), the same code the golden set evaluates. This page supp
     champion, ask_genie through Databricks-managed MCP, search_docs over the docs index (CHAT-2)
   * the UI — progress while tools run, the data-age label, "How I answered", 👍/👎
   * the audit — one parameterised row per turn in skywatch.chat.chat_audit
+  * the trace — one MLflow trace per turn (roadmap OPT-2), tagged with the audit row's turn_id
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import threading
 import time
 import uuid
 
@@ -25,7 +27,7 @@ import data
 import model as m1
 from concurrent.futures import ThreadPoolExecutor
 
-from lib import docs_index
+from lib import docs_index, tracing
 from lib.chat import (
     APP_TOOLS, PROMPT_VERSION, SNAPSHOT, ToolCall, compact, data_as_of, genie_ask, run_turn, uc_call_sql,
     uc_tool_specs,
@@ -36,6 +38,7 @@ FALLBACK_ENDPOINT = os.environ.get("SKYWATCH_CHAT_FALLBACK_ENDPOINT", "databrick
 GENIE_SPACE = os.environ.get("SKYWATCH_GENIE_SPACE_ID", "")
 SELFCHECK_FILE = os.environ.get("SKYWATCH_SELFCHECK_FILE", "/tmp/skywatch_selfcheck.json")
 APT_ICAO = os.environ.get("SKYWATCH_APT_ICAO", "KATL")
+TRACE_EXPERIMENT = os.environ.get("SKYWATCH_TRACE_EXPERIMENT_ID", "")
 
 SUGGESTED = [
     "How busy is KATL right now?",
@@ -89,6 +92,19 @@ def load_docs():
 def embed(texts: list[str]) -> list[list[float]]:
     return docs_index.embed_response(_w.api_client.do(
         "POST", f"/serving-endpoints/{docs_index.EMBED_ENDPOINT}/invocations", body={"input": texts}))
+
+
+@st.cache_resource
+def tracing_state() -> dict:
+    """Set up MLflow tracing once per App process, in the background: the first setup takes
+    seconds (measured ~3 s + experiment lookup), so no visitor waits for it. Until it is done, or
+    if it fails, turns run untraced."""
+    state = {"on": False}
+
+    def setup():
+        state["on"] = tracing.setup(TRACE_EXPERIMENT)
+    threading.Thread(target=setup, daemon=True).start()
+    return state
 
 
 @st.cache_resource
@@ -370,17 +386,26 @@ if question:
         st.markdown(question)
     used: list = []
     t0 = time.monotonic()
-    with st.status("Looking it up…", expanded=True) as status:
+    turn_id, traced = uuid.uuid4().hex, tracing_state()["on"]
+    with st.status("Looking it up…", expanded=True) as status, \
+            tracing.root("chat turn", traced, {"turn_id": turn_id, "prompt_version": PROMPT_VERSION}) as trace:
+        trace.set_inputs({"question": question})
         try:
+            snapshot = live_snapshot()
+            trace.set_attributes({"snapshot": [c.name for c in snapshot if c.error is None]})
             turn = run_turn(question, llm=make_llm(used), execute=make_execute(specs, status.write),
                             tools=specs, history=[e["turn"] for e in st.session_state["chat"]],
-                            prefetched=live_snapshot())
+                            prefetched=snapshot, span=tracing.span_factory(traced))
             status.update(label="Done", state="complete", expanded=False)
         except Exception as exc:  # noqa: BLE001 — endpoint down / warehouse error: say so, keep the page
             status.update(label="Something went wrong", state="error")
+            trace.set_attributes({"error": f"{type(exc).__name__}: {str(exc)[:200]}"})
             st.error(f"SkyWatch could not answer right now: {type(exc).__name__}: {str(exc)[:200]}")
             st.stop()
-    entry = {"turn": turn, "turn_id": uuid.uuid4().hex, "as_of": data_as_of(turn.calls),
+        trace.set_outputs({"answer": turn.answer})
+        trace.set_attributes({"source": turn.source, "check_passed": turn.check.passed, "rounds": turn.rounds,
+                              "repaired": turn.repaired, "endpoint": used[-1] if used else CHAT_ENDPOINT})
+    entry = {"turn": turn, "turn_id": turn_id, "as_of": data_as_of(turn.calls),
              "endpoint": used[-1] if used else CHAT_ENDPOINT, "total_seconds": round(time.monotonic() - t0, 1)}
     audit(entry)
     st.session_state["chat"].append(entry)

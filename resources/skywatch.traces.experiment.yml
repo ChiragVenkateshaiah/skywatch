@@ -1,0 +1,7 @@
+# MLflow experiment for traces (roadmap OPT-2, docs/TRACING_PLAN.md): one trace per chat turn
+# (written by the App, which gets CAN_EDIT through its `traces-experiment` resource) and one per
+# refresh run (written by scripts/demo_ready.py, as the developer).
+resources:
+  experiments:
+    skywatch_traces:
+      name: /Users/${workspace.current_user.userName}/skywatch-traces

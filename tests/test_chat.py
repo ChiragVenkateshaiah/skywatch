@@ -241,3 +241,37 @@ def test_data_as_of_prefers_this_questions_calls_over_the_snapshot():
     gate = ToolCall("model_status", {}, compact(["gate_verdict"], [["HOLD"]]))
     assert data_as_of([snap, gate]) is None          # answered from the gate history: no live-data age
     assert data_as_of([snap]) == "2026-10-19T15:01:20Z"   # answered from the snapshot
+
+
+# ----------------------------------------------------------------------------- tracing
+class TestSpans:
+    def test_one_span_per_round_tool_and_check(self):
+        opened = []
+
+        class Span:
+            def __init__(self, name):
+                self.name, self.attrs = name, {}
+
+            def set_attributes(self, a):
+                self.attrs.update(a)
+
+        from contextlib import contextmanager
+
+        @contextmanager
+        def span(name, kind):
+            sp = Span(name)
+            opened.append((name, kind, sp))
+            yield sp
+
+        llm = FakeLLM(_tool_msg(("arrival_picture", {})), _text_msg("113 aircraft are inbound."))
+        turn = run_turn("How busy is KATL?", llm=llm, execute=_execute, tools=TOOLS, span=span)
+        assert turn.check.passed
+        assert [(n, k) for n, k, _ in opened] == [("model round 1", "CHAT_MODEL"), ("tool arrival_picture", "TOOL"),
+                                                 ("model round 2", "CHAT_MODEL"), ("check", "PARSER")]
+        assert opened[0][2].attrs["tool_calls"] == ["arrival_picture"]
+        assert opened[1][2].attrs == {"args": "{}", "error": "", "row_count": 1}
+        assert opened[3][2].attrs["passed"] is True
+
+    def test_default_span_is_a_no_op(self):
+        turn, _ = _run(_text_msg("I can answer questions about KATL arrivals."))
+        assert turn.source == "llm"

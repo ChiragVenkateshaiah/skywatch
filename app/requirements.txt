@@ -4,6 +4,8 @@
 # streamlit ... (1.38.0)") — test locally with exactly this version; newer APIs (e.g. `width=` on
 # buttons) crash in the App.
 streamlit==1.38.0
+# one MLflow trace per chat turn (roadmap OPT-2): the tracing-only package, not full mlflow
+mlflow-tracing==3.17.2
 databricks-sdk>=0.30
 pandas>=2.0
 altair>=5.2
