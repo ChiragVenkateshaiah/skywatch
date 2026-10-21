@@ -44,3 +44,25 @@ no gap: every START follows an END, and anything done between them is recorded i
      dashboard, one Ask button, the chat answer. Then open + merge the APP-1 PR.
   4. Merge the `chore/day-commands` PR if not done.
   5. OPT-4 (quota-aware evaluation) before any further golden-set run; then CHAT-2.
+
+<!-- checkpoint type=START ts=2026-10-21T06:09Z -->
+## 2026-10-21 · START · 06:09 UTC
+
+- **Previous checkpoint:** 2026-10-19 END 17:46 UTC ✓
+- **Between days:** #51 `chore/day-commands` (`/start-day`, `/end-day`) merged to `main` at
+  2026-10-19 17:49 UTC. No other commits or PRs since.
+- **State:** branch `main`, in sync with origin; no uncommitted changes; no open PRs;
+  `app/minimal-dashboard` has 1 unmerged commit (pushed, no PR); CLI auth OK; warehouse STOPPED;
+  App UNAVAILABLE / compute STOPPED; last refresh (`skywatch-demo-refresh`) SUCCESS, started
+  2026-10-19 14:52 UTC.
+- **Blockers carried over:** the SQL warehouse would not start on 2026-10-19 (Free Edition quota)
+  — not re-tested yet; the App depends on it. Golden-set runs need OPT-4 first.
+- **Plan for today:**
+  1. Check the warehouse state read-only; only if it can run, one `SELECT 1`. Start the App
+     (`bundle run skywatch_arrival_manager`) once it does.
+  2. Branch `app/minimal-dashboard`: re-run the hand-over test (chat page with
+     `pending_question` preset → one checked turn; Streamlit 1.38.0, `PYTHONPATH=app`).
+  3. Deploy; `apps logs … | grep SELFCHECK` (expect 14/14); open the App once in a browser —
+     dashboard, one Ask button, the chat answer. Then open + merge the APP-1 PR.
+  4. ~~Merge the `chore/day-commands` PR~~ — done (#51).
+  5. OPT-4 (quota-aware evaluation) before any further golden-set run; then CHAT-2.
