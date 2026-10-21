@@ -30,7 +30,8 @@ Entry gate (roadmap): CHAT-1 golden set ≥ 90% on three consecutive runs — me
 - **Corpus:** README + 12 docs. Left out: `DEMO_SCRIPT.md` (the chat would recite the demo) and
   `SKYWATCH_MLOPS_ARTICLE.md` (a publication text that repeats MLOPS_PLAN / ARCHITECTURE).
 - **Search in memory.** The App loads the table once (1 SQL, `st.cache_resource`, 1 h) and runs
-  cosine top-3 (3 × 1,500 chars fits the 6,000-char tool-result cap; a 4th passage was cut) with numpy; one embedding call per search. ~200 × 1024 floats is < 1 MB.
+  cosine top-3 with numpy (3 × 1,500 chars fits the 6,000-char tool-result cap; a 4th passage
+  was cut); one embedding call per search. ~200 × 1024 floats is < 1 MB.
 - **`search_docs(query)`** is an App-side tool (`lib.chat.APP_TOOLS`). Result rows:
   `source` (`FILE.md §Section`) and `text`.
 - **Citations are checked**, like numbers: when search_docs returned passages, the answer must
