@@ -77,6 +77,13 @@ def run_checks(genie_query: bool = True) -> list[dict]:
         return f"{len(names)} MCP tools, query accepted ({status})"
     add("genie", space or "genie", genie)
 
+    def docs():   # search_docs (CHAT-2): the index table and the embedding endpoint
+        n = data.query(f"SELECT count(*) AS n FROM {CHAT_SCHEMA}.doc_chunks")["n"].iloc[0]
+        r = _w.api_client.do("POST", "/serving-endpoints/databricks-gte-large-en/invocations",
+                             body={"input": ["selfcheck"]})
+        return f"{n} passages, embedding {len(r['data'][0]['embedding'])} dims"
+    add("docs", "doc_chunks + gte-large-en", docs)
+
     def refresh_job():
         job_id = os.environ.get("SKYWATCH_REFRESH_JOB_ID", "")
         if not job_id:

@@ -1,5 +1,5 @@
 {
- "_doc": "Golden set for Chat with SkyWatch (docs/CHAT_PLAN.md, roadmap CHAT-EVAL-1). Run by scripts/eval_chat.py against the live tools + endpoint. Written before the prompt was tuned. expect_tools: every entry must be called; 'a|b' = either. forbid_tools: '*' = no tool at all. refusal: the answer must decline. mentions: the answer must contain that value from the named tool's result (row, column). {cs0}/{cs1} are filled at run start from next_arrivals(5) rows 0/1. followup: asked as a second turn with the first as history. app_only: the tool runs only inside the App (explain_eta needs the in-process model) - scored on tool selection only here.",
+ "_doc": "Golden set for Chat with SkyWatch (docs/CHAT_PLAN.md, roadmap CHAT-EVAL-1). Run by scripts/eval_chat.py against the live tools + endpoint. Written before the prompt was tuned. expect_tools: every entry must be called; 'a|b' = either. forbid_tools: '*' = no tool at all. refusal: the answer must decline. mentions: the answer must contain that value from the named tool's result (row, column). {cs0}/{cs1} are filled at run start from next_arrivals(5) rows 0/1. followup: asked as a second turn with the first as history. app_only: the tool runs only inside the App (explain_eta needs the in-process model) - scored on tool selection only here. Added 2026-10-21 (CHAT-2): doc-* items need search_docs and a citation (the loop's own check); must_contain_any = at least one of these words in the answer.",
  "items": [
   {
    "id": "live-01",
@@ -298,6 +298,74 @@
    "followup": "How fast is it flying?",
    "expect_tools": [
     "aircraft|next_arrivals"
+   ]
+  },
+  {
+   "id": "doc-01",
+   "question": "How does Model 1 predict landing times?",
+   "expect_tools": [
+    "search_docs"
+   ],
+   "must_contain_any": [
+    "LightGBM",
+    "gradient"
+   ]
+  },
+  {
+   "id": "doc-02",
+   "question": "Why is Model 3 based on rules instead of a learned model?",
+   "expect_tools": [
+    "search_docs"
+   ],
+   "must_contain_any": [
+    "label",
+    "example",
+    "too few"
+   ]
+  },
+  {
+   "id": "doc-03",
+   "question": "Why didn't the Transformer replace LightGBM for Model 1?",
+   "expect_tools": [
+    "search_docs|model_status"
+   ],
+   "must_contain_any": [
+    "overfit",
+    "MAE"
+   ]
+  },
+  {
+   "id": "doc-04",
+   "question": "How does a new model version get promoted to production?",
+   "expect_tools": [
+    "search_docs"
+   ],
+   "must_contain_any": [
+    "gate",
+    "promot"
+   ]
+  },
+  {
+   "id": "doc-05",
+   "question": "Something looks wrong with the models. Where should I look first?",
+   "expect_tools": [
+    "search_docs|model_health|model_status"
+   ],
+   "must_contain_any": [
+    "health",
+    "monitoring"
+   ]
+  },
+  {
+   "id": "doc-06",
+   "question": "How does the chat make sure the numbers in its answers are right?",
+   "expect_tools": [
+    "search_docs"
+   ],
+   "must_contain_any": [
+    "tool",
+    "check",
+    "ground"
    ]
   }
  ]
