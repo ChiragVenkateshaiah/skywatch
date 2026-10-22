@@ -362,6 +362,7 @@ with st.sidebar:
                 st.session_state["confirm_refresh"] = True
                 st.rerun()
 
+tracing_state()   # start the tracing set-up when the page renders, so the first question is traced too
 st.title("💬 Chat with SkyWatch")
 st.caption(f"Ask about {APT_ICAO} arrivals and SkyWatch's models. Every number in an answer is checked "
            "against the data the tools returned; times are UTC.")

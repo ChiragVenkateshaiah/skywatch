@@ -63,3 +63,8 @@ visible in the experiment UI.
   `mlflow-tracing` 3.17.2 → the same ImportError) and fixed by pinning `mlflow-skinny==3.17.2`
   in `app/requirements.txt`, which replaces the image's copy whole. The self-check gained a
   `trace` line (MLflow versions + experiment access as the App SP), so this shows at start-up.
+- **2026-10-22 — second deploy: self-check 16/16** (`trace  experiment 4236095730365180 ·
+  mlflow-skinny 3.17.2, mlflow-tracing 3.17.2`; the build log confirmed the image's
+  `mlflow-skinny 2.16.2` was replaced). The next question was still untraced: the page called
+  `tracing_state()` only when a question arrived, so the set-up started with the first question
+  (set-up at 05:21:37, turn 05:21:36–05:21:40). Fixed: the page starts it when it renders.
