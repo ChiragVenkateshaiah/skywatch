@@ -14,7 +14,7 @@ visible in the experiment UI.
 | Check | Result |
 |---|---|
 | MLflow in the App image / local venvs | not installed — the App needs a dependency |
-| `mlflow-tracing` 3.17.2 (tracing-only package) | 59 MB with its deps; resolves with the App's pins (`streamlit==1.38.0`, protobuf 5.29.6) |
+| `mlflow-tracing` 3.17.2 (tracing-only package) | 59 MB with its deps; resolves with the App's pins (`streamlit==1.38.0`, protobuf 5.29.6) — but see §5: the App uses `mlflow-skinny` |
 | Trace from a laptop to a Free Edition experiment | works; read back with all spans |
 | Cost on the request path | **first trace in a process ~3.3 s** (client setup; plus ~20 s the first time an experiment is created), **every later trace ~0.00 s** (async export) — same with async logging forced on |
 | App resource for an experiment | `experiment` resource, GA, permission `CAN_EDIT` — no manual grant |
@@ -56,3 +56,10 @@ visible in the experiment UI.
 
 - **2026-10-21 — steps 1–3** on branch `opt/tracing`. Not deployed: the App is stopped to save
   quota until the next demo.
+- **2026-10-22 — first deploy: no traces.** The App logged `tracing off: cannot import name
+  'EvaluationDataset' from 'mlflow.entities'` — the fallback worked (the turn ran untraced). The
+  Apps base image ships its own `mlflow-skinny`; `mlflow-tracing` 3.17.2 on top mixed two
+  versions in one `mlflow` package folder. Reproduced locally (`mlflow-skinny` 2.21.3 or 3.1.0 +
+  `mlflow-tracing` 3.17.2 → the same ImportError) and fixed by pinning `mlflow-skinny==3.17.2`
+  in `app/requirements.txt`, which replaces the image's copy whole. The self-check gained a
+  `trace` line (MLflow versions + experiment access as the App SP), so this shows at start-up.
