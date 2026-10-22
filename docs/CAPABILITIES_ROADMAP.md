@@ -50,15 +50,15 @@ Effort: S ≤ 1 day · M 2–4 days · L ≥ 1 week.
 
 | ID | Capability | Pri | Value | Effort | Depends on | Pick-up trigger | Ships in |
 |---|---|---|---|---|---|---|---|
-| **DATA-1** | Pre-interview refresh job `skywatch_demo_refresh`: preflight → reset live tables → short poller burst → pipeline → gold serving → scoring (sequential) → briefing → readiness check; per-step timings logged | P0 | High — every demo depends on it | M | — | now | Platform v1.1 |
+| **DATA-1** | Pre-interview refresh job `skywatch_demo_refresh`: preflight → reset live tables → short poller burst → pipeline → gold serving → scoring (sequential) → briefing → readiness check; per-step timings logged | P0 | High — every demo depends on it | M | — | ✅ done 2026-10-19 (PR #45) — READY in 8.5 min with the scoring tasks in sequence | Platform v1.1 |
 | **DATA-2a** | Local ops agent `scripts/demo_ready.py`: starts DATA-1, prints each task state change, reads the `refresh_audit` verdict, retries a *transient* failure once (Jobs repair), else an LLM diagnosis that must quote the run's real error | P0 | High — one command before an interview | M | DATA-1 | ✅ built 2026-10-19 | Platform v1.2 |
 | **DATA-2b** | In-app "Get SkyWatch ready": a sidebar button with a confirmation (a human action — the model gets only a read-only `refresh_status` tool); App resource `job` CAN_MANAGE_RUN | P1 | Medium — demo moment | S–M | CHAT-1, DATA-2a | ✅ built 2026-10-19 | App v2.0 |
 | **CHAT-1** | "Chat with SkyWatch" page in the existing App: Maverick + curated tools (`get_arrival_picture`, `get_aircraft`, `explain_eta`, `get_flags`, `get_briefing`, `get_model_status`, `ask_genie`); grounding check on numeric answers; data-age label from tool results; "how I answered" panel. **Tools are UC functions served through Databricks-managed MCP** (decided 2026-10-19): written once, used by the chat, the ops agent and Genie; `ask_genie` = the managed Genie MCP tool | P0 | High — the headline feature | L | App SP: `serving_endpoint` CAN_QUERY, `genie_space` access, `EXECUTE` on the UC functions; UC Python functions on this warehouse (verify first) | ✅ done 2026-10-19 (runs 38/37/38 of 38) | App v2.0 |
-| **CHAT-EVAL-1** | `chat_audit` table (question, tools, answer, check, tokens, latency, prompt version, 👍/👎) + golden set of 50–100 questions (tool-selection accuracy, grounding pass rate, out-of-scope refusals) | P0 | High — "measure, then tune" | M | CHAT-1 | with CHAT-1 | App v2.0 |
+| **CHAT-EVAL-1** | `chat_audit` table (question, tools, answer, check, tokens, latency, prompt version, 👍/👎) + golden set of 50–100 questions (tool-selection accuracy, grounding pass rate, out-of-scope refusals) | P0 | High — "measure, then tune" | M | CHAT-1 | ✅ done with CHAT-1 2026-10-19 (38 items; 44 with CHAT-2) | App v2.0 |
 | **CHAT-2** | Knowledge about SkyWatch and its models: docs chunked + embedded (`gte-large-en`) into Delta by a local script (not a job — decided 2026-10-21), in-memory index in the App, `search_docs` tool, answers cite `file §section` (checked) | P1 | High — "why/how" questions | M | CHAT-1 | ✅ done 2026-10-21 (PR #54) — 207 passages; golden set 43/44, 43/44, 42/44 (CHAT-1 items 38/38 each); SELFCHECK 15/15; a cited answer checked in a browser (`docs/CHAT_KNOWLEDGE_PLAN.md`) | App v2.1 |
-| **CHAT-3** | Genie v2: ground-check Genie answers (show its SQL + rows), route ambiguous questions to curated tools first | P1 | Medium | M | CHAT-1 | `ask_genie` share of turns ≥ 20% or its 👎 rate ≥ 2× curated tools | App v2.2 |
+| **CHAT-3** | Genie v2: ground-check Genie answers (show its SQL + rows), route ambiguous questions to curated tools first | P1 | Medium | M | CHAT-1 | `ask_genie` share of turns ≥ 20% or its 👎 rate ≥ 2× curated tools — not measured yet: count `ask_genie` turns and 👎 in `chat_audit` after the next demo | App v2.2 |
 | **OPT-1** | Latency: a prefetched live snapshot so common questions take one model round (prompt size measured *not* to matter; streaming rejected — an answer must pass its check before it is shown) | P1 | Medium | S–M | CHAT-EVAL-1 (numbers to tune against) | ✅ done 2026-10-19 — *rounds, not tokens*: a prefetched live snapshot cut p50 5.2 → 2.1–2.6 s at 38/38 (`docs/CHAT_PLAN.md` §6) | App v2.x |
-| **OPT-2** | MLflow tracing per chat turn and per refresh step | P1 | Medium — explains each slow or wrong answer | S | CHAT-1 | with OPT-1 | App v2.x |
+| **OPT-2** | MLflow tracing per chat turn and per refresh step | P1 | Medium — explains each slow or wrong answer | S | CHAT-1 | 🟡 built 2026-10-21 (`docs/TRACING_PLAN.md`), not deployed — the App is stopped to save quota | App v2.x |
 | **OPT-3** | Model fallback order for chat: Maverick → Llama 3.3 70B → tools-only template answer | P0 | Medium — demo safety | S | CHAT-1 | ✅ built with CHAT-1 2026-10-19 | App v2.0 |
 | **DEMO-1** | Fixed demo script + warm-up at the end of `demo_ready.py` (warehouse, chat tools, Genie — first MCP call was 37 s cold); the script shows the guards working (trap question, Transformer HOLD) | P0 | High — what the interview actually sees | S | CHAT-1 | ✅ built 2026-10-19 (`docs/DEMO_SCRIPT.md`) | App v2.0 |
 | **DOC-1** | ✅ `docs/LESSONS.md` (2026-10-19) — "Lessons" write-up: the real engineering stories with evidence (2 h frame build → 42 s, NaN training, Transformer overfit, parallel-setup wait, the agent's invented error, golden-set variance) | P1 | High — interview answers | S | — | after CHAT-1 (2026-10-19) | Docs |
@@ -81,8 +81,13 @@ HOLD is a complete, documented result (as in the M1 Transformer arc).
 1. **DATA-1** — and test the parallel-setup hypothesis first (it decides the job's shape).
 2. **DATA-2a** — ✅ live agent check done (MCP + `ai_query` work, agent hosting doesn't); local ops agent built.
 3. **CHAT-1 + CHAT-EVAL-1** — one arc; the golden set is written before the prompt is tuned.
-4. **CHAT-2**, then **OPT-1/2/3** against the CHAT-EVAL-1 numbers, then **CHAT-3**.
-5. **P2 model items** as their triggers fire; **AGENT-ML** with the first of them.
+4. **CHAT-2** ✅, **OPT-1** ✅ / **OPT-3** ✅ / **OPT-4** ✅, **OPT-2** 🟡 (deploy with the next App
+   start), then **CHAT-3** when its trigger fires.
+5. **P2 model items** as their triggers fire — the first is **DATA-3** with the 2026-11-01
+   monthly file; **AGENT-ML** with the first model item.
+
+Re-ranked 2026-10-21 after CHAT-2: no order change. Every P0 item is done; what is left is P1
+(OPT-2 deploy, CHAT-3 on its trigger) and the P2 / P3 items on their triggers.
 
 ## 5. Versioning
 
@@ -109,39 +114,21 @@ HOLD is a complete, documented result (as in the M1 Transformer arc).
   was given — numbers for the briefing, a quoted error line for the diagnosis — with a plain
   fallback when the check fails. CHAT-1's tool loop needs the same guard.
 
-## 8. Where we stopped (checkpoint 2026-10-19)
+## 8. Where we stopped (checkpoint 2026-10-21)
 
-Shipped to `main` and live in the App today: DATA-1 (refresh job), DATA-2a (local ops agent),
-CHAT-1 + CHAT-EVAL-1 + DATA-2b + OPT-3 + DEMO-1 (PR #48), OPT-1 live snapshot + DOC-1 lessons
-(PR #49), the Streamlit 1.38.0 pin that fixed the chat page crash (PR #50).
+Shipped to `main` and live in the App: DATA-1, DATA-2a/b, CHAT-1, CHAT-EVAL-1, OPT-1, OPT-3,
+DEMO-1, DOC-1 (2026-10-19); APP-1 (#52), OPT-4 (#53), CHAT-2 (#54) (2026-10-21). The
+2026-10-19 warehouse quota stop ended on 2026-10-21 (the warehouse started again).
 
-**Stopped by the Free Edition compute quota.** Late on 2026-10-19 the SQL warehouse
-(`8fd481cbf45ac93e`) would not start: every query → "The request could not be processed by the
-warehouse"; `databricks warehouses start` → "Cannot create the resource, please try again later."
-The live App can't load data until it starts again. Most likely the daily quota after a heavy day
-(three refreshes, many jobs, ~15 golden-set runs, several App restarts) → OPT-4.
+**In progress — OPT-2, branch `opt/tracing`:** built and tested, not deployed (the App is
+stopped to save quota). Deploy with the next App start: `bundle deploy` + `bundle run
+skywatch_arrival_manager`, then one chat turn and find its trace in `skywatch-traces` by its
+`turn_id` (`docs/TRACING_PLAN.md` §4).
 
-**In progress — APP-1, branch `app/minimal-dashboard` (pushed, not merged, not deployed):**
-`app/dashboard.py` rewritten; `app/chat.py` picks up a question handed over by the dashboard
-(`pending_question`); unused `app/data.py` helpers removed. Tested headless on Streamlit 1.38.0:
-no exceptions, no error/warning boxes, 4 KPIs, briefing, map, chart, 3 "Ask SkyWatch" buttons.
+**Before any demo:** run the refresh (`scripts/demo_ready.py`, or *Get SkyWatch ready* in the
+App) — the data is as of 2026-10-19 15:01 UTC.
 
-**Next, in order, once the warehouse starts:**
-1. `databricks api post /api/2.0/sql/statements … "SELECT 1"` — one call to confirm it's back.
-2. Re-run the hand-over test: chat page with `pending_question` preset must produce one checked
-   turn (on 2026-10-19 it reached the page but failed on the warehouse, not on the code).
-   `AppTest` 1.38 can't drive the `st.navigation` router, so test the two halves separately.
-3. `bundle deploy` + `bundle run skywatch_arrival_manager`; `apps logs … | grep SELFCHECK` (expect
-   14/14); open the App in a browser once — dashboard, an Ask button, the chat answer.
-4. Open the APP-1 PR, merge, then OPT-4 before any further golden-set runs; then CHAT-2.
-
-**Resumed 2026-10-21:** the warehouse started again (`SELECT 1` ok). Steps 1–3 done: the
-hand-over test passed in two halves — the dashboard's Ask button sets `pending_question`; the
-chat page with it preset gave one turn, Maverick, 1 round, grounding check passed, 5.4 s.
-APP-1 deployed: SELFCHECK 14/14, dashboard → Ask → chat answer checked in a browser. The data
-is still as of 2026-10-19 15:01 UTC (schedules paused) — run the refresh before a demo.
-Step 4 done the same day: APP-1 (PR #52), OPT-4 (PR #53) and CHAT-2 (PR #54) merged and live.
+Day-to-day next steps live in the daily log (`DAILY_LOG.md` on branch `daily-log`).
 
 Local test setup to remember: the App's Streamlit is **1.38.0** — test in a venv with exactly that
 (`AppTest` there needs `PYTHONPATH=app`); the Spark tests need a JDK (CI has one).
-

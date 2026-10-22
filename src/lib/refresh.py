@@ -5,6 +5,8 @@ the inputs (the job run's JSON from the Jobs API, freshness queries) and calls t
   step_timings  Jobs API `get_run` JSON -> one row per task: setup / execution / total seconds,
                 result state — the record of where the 10-minute budget went
   readiness     the inputs -> READY / READY_SLOW / NOT_READY + the reasons
+  trace_spans   the same run JSON -> a span plan (run > task > setup / execution) with the real
+                timestamps, which scripts/demo_ready.py writes as one MLflow trace (roadmap OPT-2)
 
 Ingestion freshness is judged on `gold_tracks` (what the poller + pipeline + gold actually
 produced), not on `predictions`: at night a fresh burst can hold zero KATL inbounds, and
@@ -47,6 +49,39 @@ def step_timings(run: dict[str, Any]) -> list[dict[str, Any]]:
             "start_time": start,
         })
     return sorted(out, key=lambda r: r["start_time"] or 0)
+
+
+def trace_spans(run: dict[str, Any]) -> list[dict[str, Any]]:
+    """One span per run, per task (latest attempt) and per task phase, timestamps in ms from the
+    run JSON. `parent` is the index of the parent span (None = the root). Tasks that never
+    started (skipped / blocked) are left out; a phase with no duration is left out."""
+    tasks = [t for t in latest_attempts(run.get("tasks", [])) if t.get("start_time")]
+    ends = [t["end_time"] for t in tasks if t.get("end_time")]
+    start = run.get("start_time") or min((t["start_time"] for t in tasks), default=0)
+    end = run.get("end_time") or max(ends, default=start)
+    state = run.get("state") or {}
+    spans = [{"name": f"refresh run {run.get('run_id')}", "parent": None, "kind": "CHAIN",
+              "start_ms": start, "end_ms": end,
+              "attrs": {"run_id": run.get("run_id"), "result_state": state.get("result_state") or "",
+                        "tasks": len(tasks)}}]
+    for t in sorted(tasks, key=lambda t: t["start_time"]):
+        st = t.get("state") or {}
+        t_end = t.get("end_time") or end
+        setup, execution = t.get("setup_duration") or 0, t.get("execution_duration") or 0
+        spans.append({"name": f"task {t['task_key']}", "parent": 0, "kind": "CHAIN",
+                      "start_ms": t["start_time"], "end_ms": t_end,
+                      "attrs": {"state": st.get("result_state") or st.get("life_cycle_state") or "",
+                                "attempt": t.get("attempt_number") or 0, "setup_s": round(setup / 1000),
+                                "exec_s": round(execution / 1000)}})
+        parent = len(spans) - 1
+        if setup:
+            spans.append({"name": "setup", "parent": parent, "kind": "UNKNOWN", "start_ms": t["start_time"],
+                          "end_ms": t["start_time"] + setup, "attrs": {}})
+        if execution:
+            spans.append({"name": "execution", "parent": parent, "kind": "UNKNOWN",
+                          "start_ms": t["start_time"] + setup, "end_ms": t["start_time"] + setup + execution,
+                          "attrs": {}})
+    return spans
 
 
 @dataclass

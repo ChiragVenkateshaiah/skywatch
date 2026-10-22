@@ -1,0 +1,58 @@
+# SkyWatch — tracing (roadmap OPT-2)
+
+## 1. Why
+
+`chat_audit` records *what* a chat turn did (tools, answer, check, totals). It can't show *where
+the time went* inside a turn, or which round made a wrong choice — e.g. why doc-05 / doc-06
+sometimes skip `search_docs` (`docs/CHAT_KNOWLEDGE_PLAN.md` §6). The refresh has the same gap:
+`refresh_audit` has per-task totals, but the 645–705 s serverless *setup* wait of 2026-10-19 was
+found by reading run JSON by hand. One MLflow trace per chat turn and per refresh run makes both
+visible in the experiment UI.
+
+## 2. Measured before designing (2026-10-21)
+
+| Check | Result |
+|---|---|
+| MLflow in the App image / local venvs | not installed — the App needs a dependency |
+| `mlflow-tracing` 3.17.2 (tracing-only package) | 59 MB with its deps; resolves with the App's pins (`streamlit==1.38.0`, protobuf 5.29.6) |
+| Trace from a laptop to a Free Edition experiment | works; read back with all spans |
+| Cost on the request path | **first trace in a process ~3.3 s** (client setup; plus ~20 s the first time an experiment is created), **every later trace ~0.00 s** (async export) — same with async logging forced on |
+| App resource for an experiment | `experiment` resource, GA, permission `CAN_EDIT` — no manual grant |
+| Refresh run → trace with real timestamps | `start_span_no_context(start_time_ns=…)` + `end(end_time_ns=…)`: the 2026-10-19 run became one 616.8 s trace, 27 spans, no compute |
+
+## 3. Design
+
+- **Experiment:** bundle resource `skywatch_traces` → `/Users/<me>/skywatch-traces`
+  (`resources/skywatch.traces.experiment.yml`). The App gets `CAN_EDIT` through its
+  `traces-experiment` resource and the id as `SKYWATCH_TRACE_EXPERIMENT_ID`.
+- **Chat turn** — one trace, tagged `turn_id` (the `chat_audit` key) and `prompt_version`:
+  `chat turn` (AGENT: question, answer, source, check, rounds, endpoint, snapshot tools) →
+  `model round N` (CHAT_MODEL: messages, tokens, tool calls requested) · `tool <name>` (TOOL:
+  args, row count, error) · `check` (PARSER: passed, reasons, repair round).
+- **`lib.chat` stays MLflow-free:** `run_turn(..., span=...)` takes a context-manager factory;
+  the default is a no-op. `lib.tracing` holds the only MLflow code, imported lazily.
+- **Never breaks a turn:** a span that can't be opened or exported becomes a no-op; tracing is
+  set up once per App process in a background thread, so no visitor waits ~3 s for it; turns
+  before it is ready run untraced.
+- **Refresh run** — one trace per finished run, written by `scripts/demo_ready.py` (also with
+  `--report-only`, so a refresh started from the App's button is traced the next time the report
+  runs): `refresh run <id>` → `task <key>` (state, attempt, setup_s, exec_s) → `setup` ·
+  `execution`, at the run's real timestamps (`lib.refresh.trace_spans`). Tagged `kind=refresh`,
+  `run_id`; a run that already has a trace is skipped. Not traced inside the job: that would add
+  an import and a dependency to a serverless task to record what the Jobs API already knows.
+
+## 4. Order of work
+
+1. `lib.chat` span hook, `lib.refresh.trace_spans`, `lib.tracing` + tests. ✅
+2. Live check without warehouse or model compute: a fake-model turn and the real 2026-10-19
+   refresh run written as traces and read back. ✅
+3. Bundle experiment + App resource + env; `mlflow-tracing` in `app/requirements.txt` and
+   `requirements-dev.txt`. ✅ (`bundle validate` OK)
+4. Deploy; one chat turn in the App → its trace in `skywatch-traces`, tagged with its
+   `turn_id`; compare the root span's duration with the turn's `total_seconds`.
+5. Then use it: trace doc-05 / doc-06 to see which round skips `search_docs`.
+
+## 5. Progress log
+
+- **2026-10-21 — steps 1–3** on branch `opt/tracing`. Not deployed: the App is stopped to save
+  quota until the next demo.

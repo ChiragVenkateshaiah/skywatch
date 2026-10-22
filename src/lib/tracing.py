@@ -1,0 +1,120 @@
+"""MLflow tracing adapters (roadmap OPT-2, docs/TRACING_PLAN.md) — the only place SkyWatch touches
+MLflow tracing. Imported lazily: without `mlflow-tracing` installed, or with no experiment
+configured, every function here is a no-op and the caller works as before.
+
+  span_factory    -> the `span(name, kind)` hook lib.chat.run_turn takes (one trace per turn,
+                     opened by the caller with `root`)
+  write_plan      a lib.refresh.trace_spans plan -> one trace with the run's real timestamps
+
+A tracing failure never breaks a chat turn or a refresh report: errors are swallowed and the
+no-op span is used instead.
+
+Measured 2026-10-21 (Free Edition): the first trace in a process costs ~3.3 s of client setup,
+every later one ~0.00 s on the request path (export is async) — so callers warm up once with
+`setup` in the background.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from contextlib import contextmanager
+from typing import Any, Iterator
+
+log = logging.getLogger(__name__)
+
+
+class _NoSpan:
+    def set_attributes(self, attributes: dict[str, Any]) -> None:
+        pass
+
+    def set_inputs(self, inputs: Any) -> None:
+        pass
+
+    def set_outputs(self, outputs: Any) -> None:
+        pass
+
+
+def setup(experiment: str | None) -> bool:
+    """Point MLflow at the experiment (an id, or a workspace path). False = tracing off."""
+    if not experiment:
+        return False
+    try:
+        import mlflow
+        mlflow.set_tracking_uri("databricks")
+        if experiment.isdigit():
+            mlflow.set_experiment(experiment_id=experiment)
+        else:
+            mlflow.set_experiment(experiment)
+        return True
+    except Exception as exc:  # noqa: BLE001 — no tracing is better than no chat
+        log.warning("tracing off: %s", exc)
+        return False
+
+
+def _attrs(a: dict[str, Any]) -> dict[str, Any]:
+    return {k: v if isinstance(v, (str, int, float, bool)) else json.dumps(v, default=str) for k, v in a.items()}
+
+
+@contextmanager
+def _span(name: str, kind: str, **kw) -> Iterator[Any]:
+    try:
+        import mlflow
+        cm = mlflow.start_span(name=name, span_type=kind, **kw)
+        sp = cm.__enter__()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("span %s not traced: %s", name, exc)
+        yield _NoSpan()
+        return
+    real_set = sp.set_attributes
+    sp.set_attributes = lambda a: real_set(_attrs(a))   # MLflow wants scalar or JSON attributes
+    try:
+        yield sp
+    except BaseException as exc:
+        cm.__exit__(type(exc), exc, exc.__traceback__)
+        raise
+    else:
+        try:
+            cm.__exit__(None, None, None)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("span %s not exported: %s", name, exc)
+
+
+def span_factory(enabled: bool):
+    """The `span` argument for lib.chat.run_turn."""
+    if not enabled:
+        from lib.chat import no_span
+        return no_span
+    return _span
+
+
+@contextmanager
+def root(name: str, enabled: bool, tags: dict[str, str] | None = None) -> Iterator[Any]:
+    """The trace's root span (one chat turn). Tags make it findable from chat_audit (turn_id)."""
+    if not enabled:
+        yield _NoSpan()
+        return
+    with _span(name, "AGENT") as sp:
+        if tags:
+            try:
+                import mlflow
+                mlflow.update_current_trace(tags=tags)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("trace tags not set: %s", exc)
+        yield sp
+
+
+def write_plan(plan: list[dict[str, Any]], tags: dict[str, str] | None = None) -> str | None:
+    """lib.refresh.trace_spans output -> one trace with the given timestamps. Returns its id."""
+    if not plan:
+        return None
+    import mlflow
+    live: list[Any] = []
+    for s in plan:
+        parent = live[s["parent"]] if s["parent"] is not None else None
+        live.append(mlflow.start_span_no_context(
+            s["name"], span_type=s["kind"], parent_span=parent, attributes=_attrs(s["attrs"]),
+            tags=tags if parent is None else None, start_time_ns=int(s["start_ms"]) * 1_000_000))
+    for s, sp in reversed(list(zip(plan, live))):      # children first, the root last
+        sp.end(end_time_ns=int(s["end_ms"]) * 1_000_000)
+    return live[0].trace_id

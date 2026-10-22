@@ -59,6 +59,11 @@ resources:
           job:
             id: ${resources.jobs.skywatch_demo_refresh.id}
             permission: CAN_MANAGE_RUN
+        # one MLflow trace per chat turn (roadmap OPT-2)
+        - name: traces-experiment
+          experiment:
+            experiment_id: ${resources.experiments.skywatch_traces.id}
+            permission: CAN_EDIT
       # Overrides app/app.yaml's env at deploy time — files under source_code_path aren't
       # bundle-variable-substituted, so this is how catalog/schema/airport config actually
       # varies per target (docs/MLOPS_PLAN.md Track 3). app/app.yaml keeps the same literal
@@ -87,3 +92,5 @@ resources:
             value_from: genie-space
           - name: SKYWATCH_REFRESH_JOB_ID
             value_from: demo-refresh-job
+          - name: SKYWATCH_TRACE_EXPERIMENT_ID
+            value_from: traces-experiment
