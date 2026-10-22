@@ -118,3 +118,31 @@ no gap: every START follows an END, and anything done between them is recorded i
   3. Pick the next roadmap item: CHAT-3 (Genie v2) waits for its trigger (`ask_genie` share
      ≥ 20% or 👎 rate ≥ 2×); else OPT-2 or the doc-05 / doc-06 tool-choice weakness.
   4. Golden-set runs only after a prompt / tool / loop change; OPT-4 skips the rest.
+
+<!-- checkpoint type=START ts=2026-10-22T05:02Z -->
+## 2026-10-22 · START · 05:02 UTC
+
+- **Previous checkpoint:** 2026-10-21 END 09:12 UTC ✓
+- **Between days:**
+  - App stopped by the user at 2026-10-21 09:39 UTC (`databricks apps stop`) — the END entry
+    still said RUNNING / ACTIVE.
+  - OPT-2 built on `opt/tracing` (`e5cfe32`): one MLflow trace per chat turn (App, tagged with
+    the `chat_audit` turn_id) and per refresh run (`demo_ready.py`, real timestamps, no compute);
+    bundle experiment `skywatch-traces` + App resource `traces-experiment` (CAN_EDIT). Live
+    tests without warehouse / model compute into a probe experiment (deleted afterwards). Same
+    PR fixed stale roadmap rows (DATA-1, CHAT-EVAL-1 done; CHAT-3 trigger not measured),
+    re-ranked after CHAT-2 (no order change), §8 rewritten as the 2026-10-21 checkpoint.
+  - #56 merged 2026-10-22 05:01 UTC.
+- **State:** branch `main`, in sync with origin, clean; no open PRs; no unmerged feature
+  branches; CLI auth OK; warehouse STOPPED; App UNAVAILABLE / compute STOPPED (still holds the
+  CHAT-2 code — OPT-2 not deployed); last refresh SUCCESS 2026-10-19 14:52 UTC.
+- **Blockers carried over:** data as of 2026-10-19 15:01 UTC; OPT-2 unverified in the App;
+  doc-05 / doc-06 flaky (search_docs skipped or not cited).
+- **Plan for today:**
+  1. ~~Decide whether to stop the App's compute~~ — done (stopped 2026-10-21 09:39 UTC).
+  2. Before a demo: run the refresh, then check the freshness pill.
+  3. With the next App start: `bundle deploy` + `bundle run`, one chat turn, find its trace in
+     `skywatch-traces` by `turn_id` (`docs/TRACING_PLAN.md` §4 step 4).
+  4. Next roadmap item: CHAT-3 waits for its trigger (measure from `chat_audit`); else the
+     doc-05 / doc-06 tool-choice weakness, using the new traces.
+  5. Golden-set runs only after a prompt / tool / loop change; OPT-4 skips the rest.
