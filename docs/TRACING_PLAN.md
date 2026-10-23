@@ -14,7 +14,7 @@ visible in the experiment UI.
 | Check | Result |
 |---|---|
 | MLflow in the App image / local venvs | not installed — the App needs a dependency |
-| `mlflow-tracing` 3.17.2 (tracing-only package) | 59 MB with its deps; resolves with the App's pins (`streamlit==1.38.0`, protobuf 5.29.6) |
+| `mlflow-tracing` 3.17.2 (tracing-only package) | 59 MB with its deps; resolves with the App's pins (`streamlit==1.38.0`, protobuf 5.29.6) — but see §5: the App uses `mlflow-skinny` |
 | Trace from a laptop to a Free Edition experiment | works; read back with all spans |
 | Cost on the request path | **first trace in a process ~3.3 s** (client setup; plus ~20 s the first time an experiment is created), **every later trace ~0.00 s** (async export) — same with async logging forced on |
 | App resource for an experiment | `experiment` resource, GA, permission `CAN_EDIT` — no manual grant |
@@ -29,6 +29,11 @@ visible in the experiment UI.
   `chat turn` (AGENT: question, answer, source, check, rounds, endpoint, snapshot tools) →
   `model round N` (CHAT_MODEL: messages, tokens, tool calls requested) · `tool <name>` (TOOL:
   args, row count, error) · `check` (PARSER: passed, reasons, repair round).
+  **In the App only the root arrives** (§5, 2026-10-23): the App's network can't reach the
+  storage host that holds span data. Full span trees come from the laptop:
+- **Eval turn** — `scripts/eval_chat.py --trace <experiment>`: the same root and spans for every
+  golden turn, tagged `kind=eval`, `eval_run`, `item`, `turn`, `prompt_version`. Opt-in, so a
+  normal eval run pays no tracing set-up.
 - **`lib.chat` stays MLflow-free:** `run_turn(..., span=...)` takes a context-manager factory;
   the default is a no-op. `lib.tracing` holds the only MLflow code, imported lazily.
 - **Never breaks a turn:** a span that can't be opened or exported becomes a no-op; tracing is
@@ -49,10 +54,39 @@ visible in the experiment UI.
 3. Bundle experiment + App resource + env; `mlflow-tracing` in `app/requirements.txt` and
    `requirements-dev.txt`. ✅ (`bundle validate` OK)
 4. Deploy; one chat turn in the App → its trace in `skywatch-traces`, tagged with its
-   `turn_id`; compare the root span's duration with the turn's `total_seconds`.
-5. Then use it: trace doc-05 / doc-06 to see which round skips `search_docs`.
+   `turn_id`. ✅ 2026-10-23, root only (§5); span trees from eval runs instead
+   (`eval_chat.py --trace`, checked with a fake-model turn: 5 spans read back).
+5. Then use it: `scripts/eval_chat.py --only doc-05,doc-06 --trace <id> --force` (warehouse +
+   model quota) to see which round skips `search_docs`.
 
 ## 5. Progress log
 
 - **2026-10-21 — steps 1–3** on branch `opt/tracing`. Not deployed: the App is stopped to save
   quota until the next demo.
+- **2026-10-22 — first deploy: no traces.** The App logged `tracing off: cannot import name
+  'EvaluationDataset' from 'mlflow.entities'` — the fallback worked (the turn ran untraced). The
+  Apps base image ships its own `mlflow-skinny`; `mlflow-tracing` 3.17.2 on top mixed two
+  versions in one `mlflow` package folder. Reproduced locally (`mlflow-skinny` 2.21.3 or 3.1.0 +
+  `mlflow-tracing` 3.17.2 → the same ImportError) and fixed by pinning `mlflow-skinny==3.17.2`
+  in `app/requirements.txt`, which replaces the image's copy whole. The self-check gained a
+  `trace` line (MLflow versions + experiment access as the App SP), so this shows at start-up.
+- **2026-10-22 — second deploy: self-check 16/16** (`trace  experiment 4236095730365180 ·
+  mlflow-skinny 3.17.2, mlflow-tracing 3.17.2`; the build log confirmed the image's
+  `mlflow-skinny 2.16.2` was replaced). The next question was still untraced: the page called
+  `tracing_state()` only when a question arrived, so the set-up started with the first question
+  (set-up at 05:21:37, turn 05:21:36–05:21:40). Fixed: the page starts it when it renders.
+- **2026-10-23 — third deploy: the trace arrives, its spans don't.** Turn `3f95e50d…` ("Which
+  aircraft lands next?") made trace `tr-33ec2cfd…` in `skywatch-traces`: tagged `turn_id` +
+  `prompt_version`, question, answer, 2.68 s, 3 spans in its size stats. But the span file never
+  uploaded: MLflow writes the trace *record* through the workspace host, then PUTs `traces.json` to
+  a signed URL on `us-east-2.storage.cloud.databricks.com`, and the App's network refuses that host
+  (`Connection refused`, App log 09:54:21). A laptop reaches it, so laptop traces (eval runs,
+  `demo_ready.py` refresh traces) are complete. App traces show only the root's inputs, outputs,
+  duration and tags.
+- **2026-10-23 — decision: keep the App's summary traces, trace the spans from eval runs.** The
+  span tree is needed to diagnose a wrong tool choice, and that is done with the golden set on
+  the laptop anyway. Moving traces to Unity Catalog (the App log's suggestion) was not tried: a
+  larger change, unknown on Free Edition, and reading them would need the warehouse.
+  `eval_chat.py --trace` added; a fake-model turn wrote `chat turn` → `model round 1` ·
+  `tool arrival_picture` · `model round 2` · `check` with its tags (test trace deleted after).
+  App stopped again to save quota.

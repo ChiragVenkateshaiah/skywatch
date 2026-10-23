@@ -16,15 +16,23 @@ tool SQL, golden set, this script, endpoint) match the last full run prints that
 — no warehouse or model call; `--force` re-runs. Tool results are cached on disk while the data
 version (the live picture's `scored_at`) and the tool SQL don't change, so a re-run on frozen
 data pays only for model calls; `--fresh-tools` ignores the cache.
+
+Traced (roadmap OPT-2, opt-in): `--trace <experiment id or path>` writes one MLflow trace per
+turn, with every model round, tool call and check as a span, tagged `kind=eval`, `eval_run`,
+`item` and `prompt_version`. The App's traces carry only the turn's question, answer and time
+(its network can't reach the storage that holds span data, docs/TRACING_PLAN.md §5), so this is
+where a wrong tool choice is diagnosed.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 import sys
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -32,9 +40,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dbx  # noqa: E402
-from lib import docs_index, eval_cache  # noqa: E402
+from lib import docs_index, eval_cache, tracing  # noqa: E402
 from lib.chat import (  # noqa: E402
-    APP_TOOLS, SNAPSHOT, ToolCall, compact, genie_ask, run_turn, uc_call_sql, uc_tool_specs,
+    APP_TOOLS, PROMPT_VERSION, SNAPSHOT, ToolCall, compact, genie_ask, run_turn, uc_call_sql, uc_tool_specs,
 )
 
 CACHE_DIR = ROOT / ".eval_cache"                    # git-ignored
@@ -169,13 +177,27 @@ def mention_value(item: dict, turns: list) -> str | None:
     return None
 
 
-def run_item(item: dict, tools: Tools, llm, snapshot: list[ToolCall]) -> dict:
+def traced_turn(question: str, trace_tags: dict | None, **kw):
+    """run_turn, as one trace when tracing is on (the same root as the App's, plus the spans)."""
+    on = trace_tags is not None
+    with tracing.root("chat turn", on, trace_tags) as root:
+        root.set_inputs({"question": question})
+        turn = run_turn(question, span=tracing.span_factory(on), **kw)
+        root.set_outputs({"answer": turn.answer})
+        root.set_attributes({"source": turn.source, "check_passed": turn.check.passed, "rounds": turn.rounds,
+                             "repaired": turn.repaired, "tools": [c.name for c in turn.calls]})
+    return turn
+
+
+def run_item(item: dict, tools: Tools, llm, snapshot: list[ToolCall], trace_tags: dict | None = None) -> dict:
     t0 = time.time()
-    first = run_turn(item["question"], llm=llm, execute=tools.execute, tools=tools.specs, prefetched=snapshot)
+    tags = (lambda n: {**trace_tags, "item": item["id"], "turn": str(n)}) if trace_tags else (lambda n: None)
+    first = traced_turn(item["question"], tags(1), llm=llm, execute=tools.execute, tools=tools.specs,
+                        prefetched=snapshot)
     turns = [first]
     if item.get("followup"):
-        turns.append(run_turn(item["followup"], llm=llm, execute=tools.execute, tools=tools.specs,
-                              history=[first], prefetched=snapshot))
+        turns.append(traced_turn(item["followup"], tags(2), llm=llm, execute=tools.execute, tools=tools.specs,
+                                 history=[first], prefetched=snapshot))
     s = score(item, turns, mention_value(item, turns))
     t = turns[-1]
     return {"id": item["id"], **s, "seconds": round(time.time() - t0, 1), "rounds": sum(x.rounds for x in turns),
@@ -199,6 +221,8 @@ def main() -> None:
     ap.add_argument("--snapshot", action="store_true", help="prefetch the live snapshot (roadmap OPT-1)")
     ap.add_argument("--force", action="store_true", help="run even if nothing changed since the last full run")
     ap.add_argument("--fresh-tools", action="store_true", help="ignore the tool-result cache (still writes it)")
+    ap.add_argument("--trace", metavar="EXPERIMENT", default="",
+                    help="one MLflow trace per turn into this experiment (id or path; roadmap OPT-2)")
     args = ap.parse_args()
 
     fp = eval_cache.fingerprint(FINGERPRINT_FILES + [Path(args.golden)],
@@ -224,11 +248,19 @@ def main() -> None:
             if i.get(k):
                 i[k] = i[k].replace("{cs0}", cs[0] if cs else "DAL1").replace("{cs1}", cs[1] if len(cs) > 1 else "DAL2")
     snapshot, snap_s = fetch_snapshot(tools) if args.snapshot else ([], 0.0)
+    trace_tags = None
+    if args.trace:
+        os.environ.setdefault("DATABRICKS_CONFIG_PROFILE", args.profile)
+        if tracing.setup(args.trace):
+            trace_tags = {"kind": "eval", "eval_run": uuid.uuid4().hex[:12], "prompt_version": PROMPT_VERSION}
+        else:
+            print(f"tracing off: experiment {args.trace} not reachable (pip install -r requirements-dev.txt?)")
     print(f"{len(items)} items · {len(tools.specs)} tools · endpoint {args.endpoint} · callsigns {cs[:2]}"
-          + (f" · snapshot {len(snapshot)} calls in {snap_s:.1f} s" if args.snapshot else ""))
+          + (f" · snapshot {len(snapshot)} calls in {snap_s:.1f} s" if args.snapshot else "")
+          + (f" · traced as eval_run {trace_tags['eval_run']}" if trace_tags else ""))
 
     with ThreadPoolExecutor(args.workers) as pool:
-        results = list(pool.map(lambda i: run_item(i, tools, llm_for(ws, args.endpoint), snapshot), items))
+        results = list(pool.map(lambda i: run_item(i, tools, llm_for(ws, args.endpoint), snapshot, trace_tags), items))
     with open(args.out, "w") as f:
         for r in results:
             f.write(json.dumps(r) + "\n")
@@ -260,6 +292,10 @@ def main() -> None:
     if rr:
         from collections import Counter
         print("\nwhy first answers needed a repair:", Counter(x.split(" not in")[0] for x in rr).most_common(8))
+    if trace_tags:
+        import mlflow
+        mlflow.flush_trace_async_logging()
+        print(f"traces -> experiment {args.trace}, filter tags.eval_run = '{trace_tags['eval_run']}'")
     print(f"\nall turns -> {args.out}")
 
 

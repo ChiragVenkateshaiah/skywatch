@@ -58,7 +58,7 @@ Effort: S ≤ 1 day · M 2–4 days · L ≥ 1 week.
 | **CHAT-2** | Knowledge about SkyWatch and its models: docs chunked + embedded (`gte-large-en`) into Delta by a local script (not a job — decided 2026-10-21), in-memory index in the App, `search_docs` tool, answers cite `file §section` (checked) | P1 | High — "why/how" questions | M | CHAT-1 | ✅ done 2026-10-21 (PR #54) — 207 passages; golden set 43/44, 43/44, 42/44 (CHAT-1 items 38/38 each); SELFCHECK 15/15; a cited answer checked in a browser (`docs/CHAT_KNOWLEDGE_PLAN.md`) | App v2.1 |
 | **CHAT-3** | Genie v2: ground-check Genie answers (show its SQL + rows), route ambiguous questions to curated tools first | P1 | Medium | M | CHAT-1 | `ask_genie` share of turns ≥ 20% or its 👎 rate ≥ 2× curated tools — not measured yet: count `ask_genie` turns and 👎 in `chat_audit` after the next demo | App v2.2 |
 | **OPT-1** | Latency: a prefetched live snapshot so common questions take one model round (prompt size measured *not* to matter; streaming rejected — an answer must pass its check before it is shown) | P1 | Medium | S–M | CHAT-EVAL-1 (numbers to tune against) | ✅ done 2026-10-19 — *rounds, not tokens*: a prefetched live snapshot cut p50 5.2 → 2.1–2.6 s at 38/38 (`docs/CHAT_PLAN.md` §6) | App v2.x |
-| **OPT-2** | MLflow tracing per chat turn and per refresh step | P1 | Medium — explains each slow or wrong answer | S | CHAT-1 | 🟡 built 2026-10-21 (`docs/TRACING_PLAN.md`), not deployed — the App is stopped to save quota | App v2.x |
+| **OPT-2** | MLflow tracing per chat turn and per refresh step | P1 | Medium — explains each slow or wrong answer | S | CHAT-1 | ✅ 2026-10-23 (`docs/TRACING_PLAN.md`) — App turns traced as a summary (question, answer, time, `turn_id`; the App can't upload spans), eval turns (`eval_chat.py --trace`) and refresh runs with every span | App v2.x |
 | **OPT-3** | Model fallback order for chat: Maverick → Llama 3.3 70B → tools-only template answer | P0 | Medium — demo safety | S | CHAT-1 | ✅ built with CHAT-1 2026-10-19 | App v2.0 |
 | **DEMO-1** | Fixed demo script + warm-up at the end of `demo_ready.py` (warehouse, chat tools, Genie — first MCP call was 37 s cold); the script shows the guards working (trap question, Transformer HOLD) | P0 | High — what the interview actually sees | S | CHAT-1 | ✅ built 2026-10-19 (`docs/DEMO_SCRIPT.md`) | App v2.0 |
 | **DOC-1** | ✅ `docs/LESSONS.md` (2026-10-19) — "Lessons" write-up: the real engineering stories with evidence (2 h frame build → 42 s, NaN training, Transformer overfit, parallel-setup wait, the agent's invented error, golden-set variance) | P1 | High — interview answers | S | — | after CHAT-1 (2026-10-19) | Docs |
@@ -81,13 +81,13 @@ HOLD is a complete, documented result (as in the M1 Transformer arc).
 1. **DATA-1** — and test the parallel-setup hypothesis first (it decides the job's shape).
 2. **DATA-2a** — ✅ live agent check done (MCP + `ai_query` work, agent hosting doesn't); local ops agent built.
 3. **CHAT-1 + CHAT-EVAL-1** — one arc; the golden set is written before the prompt is tuned.
-4. **CHAT-2** ✅, **OPT-1** ✅ / **OPT-3** ✅ / **OPT-4** ✅, **OPT-2** 🟡 (deploy with the next App
-   start), then **CHAT-3** when its trigger fires.
+4. **CHAT-2** ✅, **OPT-1** ✅ / **OPT-3** ✅ / **OPT-4** ✅, **OPT-2** ✅, then **CHAT-3** when its
+   trigger fires.
 5. **P2 model items** as their triggers fire — the first is **DATA-3** with the 2026-11-01
    monthly file; **AGENT-ML** with the first model item.
 
-Re-ranked 2026-10-21 after CHAT-2: no order change. Every P0 item is done; what is left is P1
-(OPT-2 deploy, CHAT-3 on its trigger) and the P2 / P3 items on their triggers.
+Re-ranked 2026-10-21 after CHAT-2: no order change. Every P0 item is done; with OPT-2 done
+(2026-10-23) what is left is P1 CHAT-3 on its trigger and the P2 / P3 items on their triggers.
 
 ## 5. Versioning
 
@@ -114,16 +114,16 @@ Re-ranked 2026-10-21 after CHAT-2: no order change. Every P0 item is done; what 
   was given — numbers for the briefing, a quoted error line for the diagnosis — with a plain
   fallback when the check fails. CHAT-1's tool loop needs the same guard.
 
-## 8. Where we stopped (checkpoint 2026-10-21)
+## 8. Where we stopped (checkpoint 2026-10-23)
 
 Shipped to `main` and live in the App: DATA-1, DATA-2a/b, CHAT-1, CHAT-EVAL-1, OPT-1, OPT-3,
-DEMO-1, DOC-1 (2026-10-19); APP-1 (#52), OPT-4 (#53), CHAT-2 (#54) (2026-10-21). The
+DEMO-1, DOC-1 (2026-10-19); APP-1 (#52), OPT-4 (#53), CHAT-2 (#54) (2026-10-21); OPT-2 (#56 +
+the App tracing fix, 2026-10-23). The
 2026-10-19 warehouse quota stop ended on 2026-10-21 (the warehouse started again).
 
-**In progress — OPT-2, branch `opt/tracing`:** built and tested, not deployed (the App is
-stopped to save quota). Deploy with the next App start: `bundle deploy` + `bundle run
-skywatch_arrival_manager`, then one chat turn and find its trace in `skywatch-traces` by its
-`turn_id` (`docs/TRACING_PLAN.md` §4).
+**Next use of OPT-2:** trace doc-05 / doc-06 with `scripts/eval_chat.py --only doc-05,doc-06
+--trace <skywatch-traces id> --force` to see which round skips `search_docs`
+(`docs/TRACING_PLAN.md` §4 step 5). The App is stopped to save quota.
 
 **Before any demo:** run the refresh (`scripts/demo_ready.py`, or *Get SkyWatch ready* in the
 App) — the data is as of 2026-10-19 15:01 UTC.

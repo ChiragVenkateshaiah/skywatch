@@ -84,6 +84,23 @@ def run_checks(genie_query: bool = True) -> list[dict]:
         return f"{n} passages, embedding {len(r['data'][0]['embedding'])} dims"
     add("docs", "doc_chunks + gte-large-en", docs)
 
+    def trace():   # OPT-2: the App image ships its own mlflow-skinny; a version mix breaks the import
+        from importlib.metadata import PackageNotFoundError, version
+        found = []
+        for pkg in ("mlflow-skinny", "mlflow-tracing", "mlflow"):
+            try:
+                found.append(f"{pkg} {version(pkg)}")
+            except PackageNotFoundError:
+                pass
+        exp = os.environ.get("SKYWATCH_TRACE_EXPERIMENT_ID", "")
+        if not exp:
+            raise RuntimeError("SKYWATCH_TRACE_EXPERIMENT_ID not set")
+        import mlflow
+        mlflow.set_tracking_uri("databricks")
+        mlflow.set_experiment(experiment_id=exp)
+        return f"experiment {exp} · {', '.join(found)}"
+    add("trace", "mlflow tracing", trace)
+
     def refresh_job():
         job_id = os.environ.get("SKYWATCH_REFRESH_JOB_ID", "")
         if not job_id:
