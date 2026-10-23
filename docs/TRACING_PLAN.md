@@ -29,6 +29,11 @@ visible in the experiment UI.
   `chat turn` (AGENT: question, answer, source, check, rounds, endpoint, snapshot tools) →
   `model round N` (CHAT_MODEL: messages, tokens, tool calls requested) · `tool <name>` (TOOL:
   args, row count, error) · `check` (PARSER: passed, reasons, repair round).
+  **In the App only the root arrives** (§5, 2026-10-23): the App's network can't reach the
+  storage host that holds span data. Full span trees come from the laptop:
+- **Eval turn** — `scripts/eval_chat.py --trace <experiment>`: the same root and spans for every
+  golden turn, tagged `kind=eval`, `eval_run`, `item`, `turn`, `prompt_version`. Opt-in, so a
+  normal eval run pays no tracing set-up.
 - **`lib.chat` stays MLflow-free:** `run_turn(..., span=...)` takes a context-manager factory;
   the default is a no-op. `lib.tracing` holds the only MLflow code, imported lazily.
 - **Never breaks a turn:** a span that can't be opened or exported becomes a no-op; tracing is
@@ -49,8 +54,10 @@ visible in the experiment UI.
 3. Bundle experiment + App resource + env; `mlflow-tracing` in `app/requirements.txt` and
    `requirements-dev.txt`. ✅ (`bundle validate` OK)
 4. Deploy; one chat turn in the App → its trace in `skywatch-traces`, tagged with its
-   `turn_id`; compare the root span's duration with the turn's `total_seconds`.
-5. Then use it: trace doc-05 / doc-06 to see which round skips `search_docs`.
+   `turn_id`. ✅ 2026-10-23, root only (§5); span trees from eval runs instead
+   (`eval_chat.py --trace`, checked with a fake-model turn: 5 spans read back).
+5. Then use it: `scripts/eval_chat.py --only doc-05,doc-06 --trace <id> --force` (warehouse +
+   model quota) to see which round skips `search_docs`.
 
 ## 5. Progress log
 
@@ -76,3 +83,10 @@ visible in the experiment UI.
   (`Connection refused`, App log 09:54:21). A laptop reaches it, so laptop traces (eval runs,
   `demo_ready.py` refresh traces) are complete. App traces show only the root's inputs, outputs,
   duration and tags.
+- **2026-10-23 — decision: keep the App's summary traces, trace the spans from eval runs.** The
+  span tree is needed to diagnose a wrong tool choice, and that is done with the golden set on
+  the laptop anyway. Moving traces to Unity Catalog (the App log's suggestion) was not tried: a
+  larger change, unknown on Free Edition, and reading them would need the warehouse.
+  `eval_chat.py --trace` added; a fake-model turn wrote `chat turn` → `model round 1` ·
+  `tool arrival_picture` · `model round 2` · `check` with its tags (test trace deleted after).
+  App stopped again to save quota.

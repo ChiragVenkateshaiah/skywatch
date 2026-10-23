@@ -6,6 +6,7 @@ from __future__ import annotations
 import sys
 import types
 from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 
@@ -20,6 +21,12 @@ class FakeSpan:
 
     def set_attributes(self, a):
         self.attrs.update(a)
+
+    def set_inputs(self, v):
+        self.inputs = v
+
+    def set_outputs(self, v):
+        self.outputs = v
 
     def end(self, end_time_ns=None):
         self.end_ns = end_time_ns
@@ -94,3 +101,28 @@ def test_write_plan_parents_and_real_times(fake_mlflow):
     assert root.kw["tags"] == {"kind": "refresh"} and task.kw["tags"] is None
     assert (setup.kw["start_time_ns"], setup.end_ns, root.end_ns) == (1_000_000_000, 2_000_000_000, 9_000_000_000)
     assert tracing.write_plan([]) is None
+
+
+def test_eval_turn_is_one_trace_with_item_tags(fake_mlflow):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import eval_chat
+    from test_chat import TOOLS, FakeLLM, _execute, _text_msg, _tool_msg
+
+    llm = FakeLLM(_tool_msg(("arrival_picture", {})), _text_msg("113 aircraft are inbound."))
+    turn = eval_chat.traced_turn("How busy is KATL?", {"kind": "eval", "item": "live-01"},
+                                 llm=llm, execute=_execute, tools=TOOLS)
+    assert turn.check.passed
+    assert [s.name for s in fake_mlflow.spans] == ["chat turn", "model round 1", "tool arrival_picture",
+                                                   "model round 2", "check"]
+    assert fake_mlflow.tags == {"kind": "eval", "item": "live-01"}
+    assert fake_mlflow.spans[0].attrs["tools"] == '["arrival_picture"]'
+
+
+def test_eval_turn_untraced_without_tags():
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import eval_chat
+    from test_chat import TOOLS, FakeLLM, _execute, _text_msg
+
+    turn = eval_chat.traced_turn("Hi", None, llm=FakeLLM(_text_msg("I can answer questions about KATL arrivals.")),
+                                 execute=_execute, tools=TOOLS)
+    assert turn.source == "llm"
