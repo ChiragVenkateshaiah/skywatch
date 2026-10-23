@@ -68,3 +68,11 @@ visible in the experiment UI.
   `mlflow-skinny 2.16.2` was replaced). The next question was still untraced: the page called
   `tracing_state()` only when a question arrived, so the set-up started with the first question
   (set-up at 05:21:37, turn 05:21:36–05:21:40). Fixed: the page starts it when it renders.
+- **2026-10-23 — third deploy: the trace arrives, its spans don't.** Turn `3f95e50d…` ("Which
+  aircraft lands next?") made trace `tr-33ec2cfd…` in `skywatch-traces`: tagged `turn_id` +
+  `prompt_version`, question, answer, 2.68 s, 3 spans in its size stats. But the span file never
+  uploaded: MLflow writes the trace *record* through the workspace host, then PUTs `traces.json` to
+  a signed URL on `us-east-2.storage.cloud.databricks.com`, and the App's network refuses that host
+  (`Connection refused`, App log 09:54:21). A laptop reaches it, so laptop traces (eval runs,
+  `demo_ready.py` refresh traces) are complete. App traces show only the root's inputs, outputs,
+  duration and tags.
