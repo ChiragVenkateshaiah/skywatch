@@ -100,3 +100,10 @@ Entry gate (roadmap): CHAT-1 golden set ≥ 90% on three consecutive runs — me
   across the board, 0.61 vs 0.58). On the cached passages doc-05 now gets
   `ML_ROADMAP.md §Model 2`, `RUNBOOKS.md §Incident`, `CHAT_PLAN.md §6`. The `tool search_docs`
   span now records the returned sources.
+- **2026-10-24 — `chat-v2.2.2` ship check: 43/44 (97.7 %) on three consecutive full runs**
+  (eval_runs `f1ac36f8f2e3`, `6448621fa30a`, `f69466720821`; 67–73 model calls and 1 SQL each,
+  tool cache reused). doc-06 passed all three. doc-05 failed all three, never on retrieval: run 1
+  skipped `search_docs`; runs 2–3 called `search_docs` + `model_health` but didn't cite a passage
+  after the repair (fallback shown). doc-01–06 alone, the day before: 4/6 (doc-05 a text tool call
+  twice, doc-06 no tool call). Next for doc-05: a prompt rule or a lighter citation rule when a
+  live tool also answers — not a retrieval change.
