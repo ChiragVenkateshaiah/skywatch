@@ -91,7 +91,7 @@ class Tools:
         if name == "explain_eta":
             raise RuntimeError("explain_eta runs only inside the App (the model is loaded there)")
         if name == "search_docs":
-            return self.docs().search(args.get("query", ""), self.embed)
+            return self.docs().search(args.get("query", ""), self.embed, question=args.get("question", ""))
         if name == "ask_genie":
             return genie_ask(lambda path, body: self.ws.post(path, body, timeout=120),
                              GENIE_SPACE, str(args.get("question", "")))

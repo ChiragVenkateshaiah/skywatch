@@ -5,6 +5,12 @@ by scripts/index_docs.py into `skywatch.chat.doc_chunks`, loaded once by the App
 memory by the `search_docs` tool. Each passage carries its source as `FILE.md §Section`, which the
 answer must cite (lib.chat checks it).
 
+The search embeds the model's query *and* the user's question (one embedding call) and
+interleaves the two rankings (query #1, question #1, query #2, ...): the model tends to shorten a
+question to a vague query ("model issues"), which lost the right passage for doc-05
+(docs/TRACING_PLAN.md §5, 2026-10-23); the question's own words found it at rank 1. Not the max
+of the two scores: a short query scores higher across the board (0.61 vs 0.58), so it would win.
+
 Pure: no network — the embedding calls live in the callers. Unit-tested in tests/test_docs_index.py.
 """
 
@@ -99,12 +105,12 @@ def normalise(vectors: list[list[float]]) -> np.ndarray:
     return m / np.maximum(np.linalg.norm(m, axis=1, keepdims=True), 1e-9)
 
 
-def search(query_vec: list[float], matrix: np.ndarray, chunks: list[dict[str, str]],
+def search(query_vecs: list[list[float]], matrix: np.ndarray, chunks: list[dict[str, str]],
            k: int = TOP_K) -> dict[str, Any]:
-    """Cosine top-k over the normalised matrix -> a tool result shaped like lib.chat.compact."""
-    q = np.asarray(query_vec, dtype=np.float32)
-    q = q / max(float(np.linalg.norm(q)), 1e-9)
-    order = np.argsort(-(matrix @ q))[:k]
+    """Cosine top-k over the normalised matrix, the rankings of several queries interleaved ->
+    a tool result shaped like lib.chat.compact."""
+    ranked = np.argsort(-(matrix @ normalise(query_vecs).T), axis=0)    # one column per query
+    order = list(dict.fromkeys(int(i) for i in ranked.ravel()))[:k]     # row by row = interleaved
     rows = [[chunks[i]["source"], chunks[i]["text"]] for i in order]
     return {"columns": ["source", "text"], "rows": rows, "row_count": len(rows)}
 
@@ -122,11 +128,14 @@ class DocIndex:
             raise RuntimeError(f"{TABLE} is empty — run scripts/index_docs.py")
         return cls([{"source": r[0], "text": r[1]} for r in rows], [json.loads(r[2]) for r in rows])
 
-    def search(self, query: str, embed: Callable[[list[str]], list[list[float]]], k: int = TOP_K) -> dict[str, Any]:
-        query = " ".join(str(query or "").split())[:300]
+    def search(self, query: str, embed: Callable[[list[str]], list[list[float]]], k: int = TOP_K,
+               question: str = "") -> dict[str, Any]:
+        """`question` = the user's own question, searched together with the model's query."""
+        query, question = (" ".join(str(s or "").split())[:300] for s in (query, question))
         if not query:
             raise ValueError("search_docs needs a query")
-        return search(embed([query])[0], self.matrix, self.chunks, k)
+        texts = [query] + ([question] if question and question.lower() != query.lower() else [])
+        return search(embed(texts), self.matrix, self.chunks, k)
 
 
 def embed_response(resp: dict[str, Any]) -> list[list[float]]:

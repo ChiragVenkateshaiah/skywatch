@@ -91,3 +91,12 @@ Entry gate (roadmap): CHAT-1 golden set ≥ 90% on three consecutive runs — me
   OPT-4 skipped it as unchanged, as designed. The weak spot is the same two items (doc-05,
   doc-06): the model sometimes skips search_docs or doesn't cite after the repair — the guard
   then shows the tool rows, never an unchecked answer. The CHAT-1 items stayed at 38/38.
+- **2026-10-23 — doc-05 diagnosed with traces (OPT-2), search fixed (`chat-v2.2.2`).** Traced
+  eval run `f6e11c46db0a` (doc-05, doc-06): both called `search_docs` — tool choice was fine —
+  but for doc-05 the model searched `"model issues"`, and no monitoring passage came in the top
+  3 (first at rank 6). The user's own question found `RUNBOOKS.md §Incident` at rank 1. Now
+  `run_turn` hands `search_docs` the question too, and `DocIndex.search` embeds both in one call
+  and interleaves the two rankings (max of the two scores failed: the short query scores higher
+  across the board, 0.61 vs 0.58). On the cached passages doc-05 now gets
+  `ML_ROADMAP.md §Model 2`, `RUNBOOKS.md §Incident`, `CHAT_PLAN.md §6`. The `tool search_docs`
+  span now records the returned sources.

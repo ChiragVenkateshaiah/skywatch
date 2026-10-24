@@ -41,7 +41,7 @@ MAX_ROUNDS = 4          # tool rounds + the final answer, including one nudge / 
 MAX_WORDS = 160
 MAX_ROWS = 25
 RESULT_CHARS = 6000
-PROMPT_VERSION = "chat-v2.2.1"   # 2.1: live snapshot (roadmap OPT-1); 2.2: search_docs (CHAT-2)
+PROMPT_VERSION = "chat-v2.2.2"   # 2.1: live snapshot (roadmap OPT-1); 2.2: search_docs (CHAT-2); 2.2.2: + the question
 
 SYSTEM_PROMPT = """You are SkyWatch, an arrival-management assistant for Atlanta airport (KATL).
 You answer questions about the live arrival picture and about SkyWatch's three models:
@@ -297,14 +297,17 @@ def run_turn(
                     if fn["name"] not in names:
                         call.error = f"unknown tool {fn['name']}"
                     else:
-                        try:
-                            call.result = execute(fn["name"], args)
+                        try:   # search_docs also searches the user's own words (lib.docs_index)
+                            call.result = execute(fn["name"], {**args, "question": question}
+                                                  if fn["name"] == "search_docs" else args)
                         except Exception as exc:  # noqa: BLE001 — the model sees the error and can recover
                             call.error = f"{type(exc).__name__}: {str(exc)[:200]}"
                     call.seconds = clock() - t0
                     sp.set_attributes({"args": json.dumps(args), "error": call.error or "",
                                        "row_count": call.result.get("row_count", -1)
                                        if isinstance(call.result, dict) else -1})
+                    if fn["name"] == "search_docs" and isinstance(call.result, dict):
+                        sp.set_attributes({"sources": [r[0] for r in call.result.get("rows", [])]})
                 turn.tool_seconds += call.seconds
                 turn.calls.append(call)
                 content = {"error": call.error} if call.error else call.result
