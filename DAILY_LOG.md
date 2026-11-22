@@ -146,3 +146,52 @@ no gap: every START follows an END, and anything done between them is recorded i
   4. Next roadmap item: CHAT-3 waits for its trigger (measure from `chat_audit`); else the
      doc-05 / doc-06 tool-choice weakness, using the new traces.
   5. Golden-set runs only after a prompt / tool / loop change; OPT-4 skips the rest.
+
+<!-- checkpoint type=END ts=2026-10-22T05:23Z -->
+## 2026-10-22 · END (reconstructed by /start-day) · 2026-11-22 17:47 UTC
+
+*Reconstructed from git and GitHub only — no `/end-day` was run for this day.*
+
+- **Since:** START 05:02 UTC
+- **Done (commits on `fix/app-tracing`, not yet merged that day):**
+  - `4e86796` fix: App tracing — pin mlflow-skinny, not mlflow-tracing; self-check trace line
+  - `0a1893b` fix: start the tracing set-up when the chat page renders, not on the first question
+- **In progress:** `fix/app-tracing` (merged later as #57 on 2026-10-23).
+- **Decisions / session notes:** *unknown*
+- **Live state:** *unknown* (App deploy / start, warehouse, refresh not visible in git).
+- **Next:** carried over from the 2026-10-22 START plan.
+
+<!-- checkpoint type=START ts=2026-11-22T17:47Z -->
+## 2026-11-22 · START · 17:47 UTC
+
+- **Previous checkpoint:** reconstructed END for 2026-10-22 added above (gap: no `/end-day`
+  since the 2026-10-22 START).
+- **Between days:**
+  - 2026-10-23 09:55 `710a4f0` docs: App traces arrive without spans — the App cannot reach the
+    storage host.
+  - 2026-10-23 10:04 `1b85e8f` feat: eval turns as full MLflow traces (`--trace`); OPT-2 done with
+    App traces as summaries.
+  - #57 "OPT-2 done: App tracing fixes, eval turns as full traces" merged 2026-10-23 10:05 UTC.
+  - 2026-10-24 05:33 `203d12f` fix: `search_docs` also searches the user's question (interleaved
+    rankings, one embedding call); its span records the sources. Prompt `chat-v2.2.2`.
+  - 2026-10-24 17:03 `525fdf1` docs: chat-v2.2.2 ship check — 43/44 on three full golden runs
+    (doc-06 passed all three; doc-05 still fails, but not on retrieval).
+  - #58 "fix: search_docs also searches the user's question (chat-v2.2.2)" opened — still OPEN.
+  - Nothing from 2026-10-25 to 2026-11-22.
+- **State:** branch `fix/docs-search-question`, in sync with origin, clean; `main` = origin/main
+  (`372b5da`); unmerged branch: `fix/docs-search-question` (#58); open PRs: #58 (CI `test` pass,
+  `validate` pass); CLI auth **EXPIRED** (refresh token invalid); warehouse *unknown* (needs
+  auth); App *unknown* (needs auth; per #58 it was stopped and does not hold chat-v2.2.2);
+  last refresh *unknown* (last known SUCCESS 2026-10-19 14:52 UTC).
+- **Blockers carried over:** CLI auth expired; data last known as of 2026-10-19 15:01 UTC;
+  App not redeployed since OPT-2 / chat-v2.2.2; doc-05 fails on tool choice / citation
+  (needs a prompt or check change).
+- **Plan for today:**
+  1. Re-login: `databricks auth login --profile skywatch`, then re-check warehouse / App state.
+  2. Merge #58 (user's call; CI green).
+  3. Before a demo: run the refresh, then check the freshness pill.
+  4. With the next App start: `bundle deploy` + `bundle run` (brings OPT-2 + chat-v2.2.2), one
+     chat turn, check its trace summary in `skywatch-traces`.
+  5. Next roadmap item: doc-05 — model skips `search_docs` or does not cite after the repair
+     (prompt or check change); CHAT-3 still waits for its trigger (measure from `chat_audit`).
+  6. Golden-set runs only after a prompt / tool / loop change; OPT-4 skips the rest.
