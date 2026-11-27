@@ -77,6 +77,24 @@ class TestSearch:
         assert r["columns"] == ["source", "text"] and r["row_count"] == 2
         assert [row[0] for row in r["rows"]] == ["B.md §Beta", "C.md §Gamma"]
 
+    def test_question_searched_with_the_query_rankings_interleaved(self):
+        vecs = {"vague": [0.0, 1.0, 0.0], "about alpha?": [1.0, 0.0, 0.0]}
+        seen = []
+
+        def embed(texts):
+            seen.append(texts)
+            return [vecs[t] for t in texts]
+        r = _index().search("vague", embed, k=2, question="about alpha?")
+        assert seen == [["vague", "about alpha?"]]
+        assert [row[0] for row in r["rows"]] == ["B.md §Beta", "A.md §Alpha"]   # each one's best
+        r = _index().search("vague", embed, k=3, question="about alpha?")
+        assert [row[0] for row in r["rows"]] == ["B.md §Beta", "A.md §Alpha", "C.md §Gamma"]   # no repeats
+
+    def test_question_same_as_query_embeds_once(self):
+        seen = []
+        _index().search("Beta", lambda t: seen.append(t) or [[0.0, 1.0, 0.0]] * len(t), question=" beta ")
+        assert seen == [["Beta"]]
+
     def test_empty_query_and_empty_table(self):
         with pytest.raises(ValueError):
             _index().search("  ", lambda t: [[1.0, 0, 0]])

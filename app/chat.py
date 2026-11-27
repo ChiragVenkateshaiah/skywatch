@@ -170,7 +170,7 @@ def make_execute(specs, progress):
             index = load_docs()
             if isinstance(index, str):
                 raise RuntimeError(f"the docs index is not available: {index}")
-            return index.search(args.get("query", ""), embed)
+            return index.search(args.get("query", ""), embed, question=args.get("question", ""))
         if name == "ask_genie":
             return genie_ask(lambda path, body: _w.api_client.do("POST", path, body=body, headers=_MCP_HEADERS),
                              GENIE_SPACE, str(args.get("question", "")))

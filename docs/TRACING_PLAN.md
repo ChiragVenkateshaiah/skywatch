@@ -90,3 +90,8 @@ visible in the experiment UI.
   `eval_chat.py --trace` added; a fake-model turn wrote `chat turn` → `model round 1` ·
   `tool arrival_picture` · `model round 2` · `check` with its tags (test trace deleted after).
   App stopped again to save quota.
+- **2026-10-23 — first use (step 5).** `eval_chat.py --only doc-05,doc-06 --trace … --force`
+  (eval_run `f6e11c46db0a`, 1 SQL, 4 model calls): both turns `model round 1` → `tool search_docs`
+  → `model round 2` → `check`, 10–11 s, ~8 s of it the two model rounds. So doc-05 did not skip
+  the tool; its *query* was too vague (`docs/CHAT_KNOWLEDGE_PLAN.md` §6). The span didn't show
+  which passages came back — it now records `sources`.

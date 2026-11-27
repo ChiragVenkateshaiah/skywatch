@@ -272,6 +272,35 @@ class TestSpans:
         assert opened[1][2].attrs == {"args": "{}", "error": "", "row_count": 1}
         assert opened[3][2].attrs["passed"] is True
 
+    def test_search_docs_gets_the_question_and_its_span_the_sources(self):
+        opened, got = [], []
+
+        class Span:
+            def __init__(self):
+                self.attrs = {}
+
+            def set_attributes(self, a):
+                self.attrs.update(a)
+
+        from contextlib import contextmanager
+
+        @contextmanager
+        def span(name, kind):
+            sp = Span()
+            opened.append((name, sp))
+            yield sp
+
+        def execute(name, args):
+            got.append((name, args))
+            return {"columns": ["source", "text"], "rows": [["RUNBOOKS.md §Incident", "Check model health."]],
+                    "row_count": 1}
+        llm = FakeLLM(_tool_msg(("search_docs", {"query": "model issues"})),
+                      _text_msg("Check model health first [RUNBOOKS.md §Incident]."))
+        run_turn("Where should I look first?", llm=llm, execute=execute, tools=TOOLS, span=span)
+        assert got == [("search_docs", {"query": "model issues", "question": "Where should I look first?"})]
+        tool = dict(opened)["tool search_docs"].attrs
+        assert tool["args"] == '{"query": "model issues"}' and tool["sources"] == ["RUNBOOKS.md §Incident"]
+
     def test_default_span_is_a_no_op(self):
         turn, _ = _run(_text_msg("I can answer questions about KATL arrivals."))
         assert turn.source == "llm"
